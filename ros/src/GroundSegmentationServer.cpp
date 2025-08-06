@@ -41,6 +41,9 @@ GroundSegmentationServer::GroundSegmentationServer(const rclcpp::NodeOptions &op
   params.min_range       = declare_parameter<double>("min_range", params.min_range);
   params.uprightness_thr = declare_parameter<double>("uprightness_thr", params.uprightness_thr);
 
+  params.obstacle_min_height = declare_parameter<double>("obstacle_min_height", params.obstacle_min_height);
+  params.obstacle_max_radius = declare_parameter<double>("obstacle_max_radius", params.obstacle_max_radius);
+
   params.verbose = get_parameter<bool>("verbose", params.verbose);
 
   // ToDo. Support intensity
@@ -69,6 +72,8 @@ GroundSegmentationServer::GroundSegmentationServer(const rclcpp::NodeOptions &op
   ground_publisher_ = create_publisher<sensor_msgs::msg::PointCloud2>("/patchworkpp/ground", qos);
   nonground_publisher_ =
       create_publisher<sensor_msgs::msg::PointCloud2>("/patchworkpp/nonground", qos);
+  obstacles_publisher_ =
+      create_publisher<sensor_msgs::msg::PointCloud2>("/patchworkpp/obstacles", qos);
 
   RCLCPP_INFO(this->get_logger(), "Patchwork++ ROS 2 node initialized");
 }
@@ -83,12 +88,14 @@ void GroundSegmentationServer::EstimateGround(
   // Get ground and nonground
   Eigen::MatrixX3f ground    = Patchworkpp_->getGround();
   Eigen::MatrixX3f nonground = Patchworkpp_->getNonground();
+  Eigen::MatrixX3f obstacles = Patchworkpp_->getObstacles();
   double time_taken          = Patchworkpp_->getTimeTaken();
-  PublishClouds(ground, nonground, msg->header);
+  PublishClouds(ground, nonground, obstacles, msg->header);
 }
 
 void GroundSegmentationServer::PublishClouds(const Eigen::MatrixX3f &est_ground,
                                              const Eigen::MatrixX3f &est_nonground,
+                                             const Eigen::MatrixX3f &est_obstacles,
                                              const std_msgs::msg::Header header_msg) {
   std_msgs::msg::Header header = header_msg;
   header.frame_id              = base_frame_;
@@ -96,6 +103,8 @@ void GroundSegmentationServer::PublishClouds(const Eigen::MatrixX3f &est_ground,
       std::move(patchworkpp_ros::utils::EigenMatToPointCloud2(est_ground, header)));
   nonground_publisher_->publish(
       std::move(patchworkpp_ros::utils::EigenMatToPointCloud2(est_nonground, header)));
+  obstacles_publisher_->publish(
+      std::move(patchworkpp_ros::utils::EigenMatToPointCloud2(est_obstacles, header)));
 }
 }  // namespace patchworkpp_ros
 

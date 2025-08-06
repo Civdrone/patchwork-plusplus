@@ -58,6 +58,8 @@ def generate_launch_description():
                 "min_range": 1.0,  # min_range of ground estimation area
                 "uprightness_thr": 0.101,
                 # threshold of uprightness using in Ground Likelihood Estimation(GLE). Please refer paper for more information about GLE.
+                "obstacle_min_height": 0.3,  # minimum height above ground to consider as obstacle
+                "obstacle_max_radius": 5.0,  # maximum distance from sensor to consider as obstacle
                 "verbose": True,  # display verbose info
             }
         ],

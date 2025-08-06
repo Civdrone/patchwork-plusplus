@@ -23,6 +23,7 @@ class GroundSegmentationServer : public rclcpp::Node {
   /// Stream the point clouds for visualization
   void PublishClouds(const Eigen::MatrixX3f &est_ground,
                      const Eigen::MatrixX3f &est_nonground,
+                     const Eigen::MatrixX3f &est_obstacles,
                      const std_msgs::msg::Header header_msg);
 
  private:
@@ -33,6 +34,7 @@ class GroundSegmentationServer : public rclcpp::Node {
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr cloud_publisher_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr ground_publisher_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr nonground_publisher_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr obstacles_publisher_;
 
   /// Patchwork++
   std::unique_ptr<patchwork::PatchWorkpp> Patchworkpp_;
