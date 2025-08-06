@@ -76,9 +76,6 @@ struct Params {
   double adaptive_seed_selection_margin;
   double intensity_thr;
 
-  double obstacle_min_height;
-  double obstacle_max_radius;
-
   vector<int> num_sectors_each_zone;
   vector<int> num_rings_each_zone;
 
@@ -117,9 +114,6 @@ struct Params {
     uprightness_thr = 0.707;  // threshold of uprightness using in Ground Likelihood
                               // Estimation(GLE). Please refer paper for more information about GLE.
     adaptive_seed_selection_margin = -1.2;  // parameter using in initial seeds selection
-
-    obstacle_min_height = 0.3;  // minimum height above ground to consider as obstacle
-    obstacle_max_radius = 5.0;  // maximum distance from sensor to consider as obstacle
 
     num_sectors_each_zone = {16, 32, 54, 32};  // Setting of Concentric Zone Model(CZM)
     num_rings_each_zone   = {2, 4, 4, 4};      // Setting of Concentric Zone Model(CZM)
@@ -175,10 +169,8 @@ class PatchWorkpp {
 
   Eigen::MatrixX3f getGround() { return toEigenCloud(cloud_ground_); }
   Eigen::MatrixX3f getNonground() { return toEigenCloud(cloud_nonground_); }
-  Eigen::MatrixX3f getObstacles() { return toEigenCloud(cloud_obstacles_); }
   Eigen::VectorXi getGroundIndices() { return toIndices(cloud_ground_); }
   Eigen::VectorXi getNongroundIndices() { return toIndices(cloud_nonground_); }
-  Eigen::VectorXi getObstacleIndices() { return toIndices(cloud_obstacles_); }
 
   Eigen::MatrixX3f getCenters() { return toEigenCloud(centers_); }
   Eigen::MatrixX3f getNormals() { return toEigenCloud(normals_); }
@@ -210,7 +202,7 @@ class PatchWorkpp {
   vector<PointXYZ> ground_pc_, non_ground_pc_;
   vector<PointXYZ> regionwise_ground_, regionwise_nonground_;
 
-  vector<PointXYZ> cloud_ground_, cloud_nonground_, cloud_obstacles_;
+  vector<PointXYZ> cloud_ground_, cloud_nonground_;
 
   vector<PointXYZ> centers_, normals_;
 

@@ -152,7 +152,6 @@ void PatchWorkpp::extract_initial_seeds(const int zone_idx,
 void PatchWorkpp::estimateGround(Eigen::MatrixXf cloud_in) {
   cloud_ground_.clear();
   cloud_nonground_.clear();
-  cloud_obstacles_.clear();
 
   if (params_.verbose)
     cout << "\033[1;32m"
@@ -283,21 +282,7 @@ void PatchWorkpp::estimateGround(Eigen::MatrixXf cloud_in) {
           candidates.push_back(candidate);
         }
         // Every regionwise_nonground is considered nonground.
-        // Filter obstacles from regionwise_nonground based on height and radius
-        vector<PointXYZ> filtered_obstacles, remaining_nonground;
-        for (auto point : regionwise_nonground_) {
-          double radius = sqrt(point.x * point.x + point.y * point.y);
-          double height = point.z - (-params_.sensor_height);  // height above ground level
-
-          if (radius <= params_.obstacle_max_radius && height >= params_.obstacle_min_height) {
-            filtered_obstacles.push_back(point);
-          } else {
-            remaining_nonground.push_back(point);
-          }
-        }
-
-        addCloud(cloud_obstacles_, filtered_obstacles);
-        addCloud(cloud_nonground_, remaining_nonground);
+        addCloud(cloud_nonground_, regionwise_nonground_);
 
         clock_t t_aft_gle = clock();
 
