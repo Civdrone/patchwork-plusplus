@@ -1,19 +1,43 @@
 from launch import LaunchDescription
 from launch.actions import ExecuteProcess
 from launch.conditions import IfCondition
-from launch.substitutions import (LaunchConfiguration, PathJoinSubstitution,
-                                  PythonExpression)
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
+ROUGH_TERRAIN = False
 
-# This configuration parameters are not exposed thorugh the launch system, meaning you can't modify
-# those throw the ros launch CLI. If you need to change these values, you could write your own
-# launch file and modify the 'parameters=' block from the Node class.
-class config:
-    # TBU. Examples are as follows:
-    max_range: float = 80.0
-    # deskew: bool = False
+# Configuration parameters not exposed through the launch system.
+# To modify these values, create your own launch file and modify the 'parameters=' block.
+
+
+def get_terrain_specific_params(rough_terrain=False):
+    """Get terrain-specific parameters for different terrain types."""
+    if rough_terrain:
+        return {
+            # Rough terrain specific parameters - more aggressive settings
+            "num_lpr": 30,  # Increase "lowest point representative" seeds to stabilize PCA over sparser returns spread across fewer vertical channels.
+            "th_dist": 0.2,  # Off-road terrain is much more uneven—allow seed clusters to spread and distance threshold to increase.
+            "th_seeds_v": 0.4,  # threshold for lowest point representatives using in initial seeds selection of vertical structural points. Default: 0.25
+            "th_dist_v": 0.15,  # Vertical structure detection (R-VPF) must tolerate larger gaps (e.g. rocky outcrops or stumps) before rejecting as non-ground.
+            "uprightness_thr": 0.6,  # Default 0.707 (cos 45°) expects planar horizontal surfaces. Lowering to ~0.6 allows terrain up to ~55° tilt be recognized as ground when numerous vertical edges exist.
+            "RNR_ver_angle_thr": -30,  # When scanning downward at 45°, ground returns sometimes appear "below" local horizon. Raising this threshold (more negative) prevents over-filtering in steep "look-down" angles.
+            "RNR_intensity_thr": 0.15,  # Slightly more restrictive than default 0.2—useful when aggressive spurious reflections occur in dusty environments.
+            "adaptive_seed_selection_margin": -1.0,  # Seeds slightly below the lowest classified ground space are allowed. Default −1.2 is conservative; off-road surfaces are unpredictable.
+            "max_flatness_storage": 2000,  # Adaptive GLE benefit increases when you store history from multiple scans from varying viewpoints in complex terrain.
+            "max_elevation_storage": 2000,
+            "flatness_thr": [0.0012, 0.0016, 0.0020, 0.0025],  # Start higher to tolerate rough terrain cracks and grass tuft features.
+            "elevation_thr": [0.9, 1.2, 1.5, 2.0],  # Elevation thresholds per ring accommodate hills or depressions; gains auto-adjust from the stored statistics.
+        }
+    else:
+        return {
+            # Standard terrain parameters - default settings suitable for flat, road-like terrain
+            "num_lpr": 20,  # Maximum number of points to be selected as lowest points representative. Default: 20
+            "th_dist": 0.125,  # threshold for thickness of ground. Default: 0.125
+            "th_seeds_v": 0.25,  # threshold for lowest point representatives using in initial seeds selection of vertical structural points. Default: 0.25
+            "th_dist_v": 0.9,  # threshold for thickness of vertical structure. Default: 0.9
+            "uprightness_thr": 0.101,  # threshold of uprightness using in Ground Likelihood Estimation(GLE). Please refer paper for more information about GLE.
+        }
 
 
 def generate_launch_description():
@@ -29,7 +53,37 @@ def generate_launch_description():
     # Optional ros bag play
     bagfile = LaunchConfiguration("bagfile", default="")
 
-    # Patchwork++ node
+    # Common parameters for all terrain types
+    common_params = {
+        # ROS node configuration
+        "base_frame": base_frame,
+        "use_sim_time": use_sim_time,
+        # Patchwork++ configuration
+        "sensor_height": 0.7,  # Need to manually measure the height of the sensor from the ground.
+        "num_iter": 3,  # Number of iterations for ground plane estimation using PCA.
+        "num_min_pts": 0,  # Minimum number of points to be estimated as ground plane in each patch. Default: 0
+                          # Some bins on terrain slopes will barely meet this minimum; avoid fitting in regions that are mostly air or sparsely filled.
+                          # 0 is the default value, which means that the minimum number of points is not used.
+        "th_seeds": 0.3,  # threshold for lowest point representatives using in initial seeds selection of ground points. Default: 0.3
+        "max_range": 60.0,  # max_range of ground estimation area; Default: 80.0
+                           # OS1-32 has a maximum range of 120 meters for 80% reflective targets and 40 meters for 10% reflective targets.
+                           # OS1 "Gen2" op-range is 120 m, but for off-road speeds and loader workspace, 60 m balances density and compute.
+        "min_range": 0.3,  # min_range of ground estimation area; Default: 1.0
+                          # 0.3m is the minimum range at which the sensor can reliably detect objects and provide point cloud data.
+        "obstacle_min_height": 0.3,  # minimum height above ground to consider as obstacle
+        "obstacle_max_radius": 2.0,  # maximum distance from sensor to consider as obstacle
+        "num_sectors_each_zone": [12, 24, 36, 24],  # Setting of Concentric Zone Model(CZM); Default: [16, 32, 54, 32]
+                                                    # 32 beams is half of the 64-beam systems tuned in the original tests.
+                                                    # Fewer sectors will ensure adequate bin occupancy per sector even in irregular terrain.
+        "num_rings_each_zone": [2, 3, 4, 5],  # Setting of Concentric Zone Model(CZM); Default: [2, 4, 4, 4]
+                                               # Place more radial granularity toward the far zone to smooth terrain transitions better without exceeding bin-count.
+        "verbose": True,  # display verbose info
+    }
+
+    # Merge common and terrain-specific parameters
+    terrain_params = get_terrain_specific_params(ROUGH_TERRAIN)
+    parameters = {**common_params, **terrain_params}
+
     patchworkpp_node = Node(
         package="patchworkpp",
         executable="patchworkpp_node",
@@ -38,32 +92,9 @@ def generate_launch_description():
         remappings=[
             ("pointcloud_topic", pointcloud_topic),
         ],
-        parameters=[
-            {
-                # ROS node configuration
-                "base_frame": base_frame,
-                "use_sim_time": use_sim_time,
-                # Patchwork++ configuration
-                "sensor_height": 1.88,
-                "num_iter": 3,  # Number of iterations for ground plane estimation using PCA.
-                "num_lpr": 20,  # Maximum number of points to be selected as lowest points representative.
-                "num_min_pts": 0,  # Minimum number of points to be estimated as ground plane in each patch.
-                "th_seeds": 0.3,
-                # threshold for lowest point representatives using in initial seeds selection of ground points.
-                "th_dist": 0.125,  # threshold for thickness of ground.
-                "th_seeds_v": 0.25,
-                # threshold for lowest point representatives using in initial seeds selection of vertical structural points.
-                "th_dist_v": 0.9,  # threshold for thickness of vertical structure.
-                "max_range": 80.0,  # max_range of ground estimation area
-                "min_range": 1.0,  # min_range of ground estimation area
-                "uprightness_thr": 0.101,
-                # threshold of uprightness using in Ground Likelihood Estimation(GLE). Please refer paper for more information about GLE.
-                "obstacle_min_height": 0.3,  # minimum height above ground to consider as obstacle
-                "obstacle_max_radius": 5.0,  # maximum distance from sensor to consider as obstacle
-                "verbose": True,  # display verbose info
-            }
-        ],
+        parameters=[parameters],
     )
+
     rviz_node = Node(
         package="rviz2",
         executable="rviz2",
@@ -82,10 +113,9 @@ def generate_launch_description():
         output="screen",
         condition=IfCondition(PythonExpression(["'", bagfile, "' != ''"])),
     )
-    return LaunchDescription(
-        [
-            patchworkpp_node,
-            rviz_node,
-            bagfile_play,
-        ]
-    )
+
+    return LaunchDescription([
+        patchworkpp_node,
+        rviz_node,
+        bagfile_play,
+    ])
