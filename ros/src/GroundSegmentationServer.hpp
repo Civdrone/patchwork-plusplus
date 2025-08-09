@@ -7,6 +7,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <std_msgs/msg/header.hpp>
+#include <civ_interfaces/msg/obstacle_state.hpp>
 
 namespace patchworkpp_ros {
 
@@ -35,6 +36,7 @@ class GroundSegmentationServer : public rclcpp::Node {
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr ground_publisher_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr nonground_publisher_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr obstacles_publisher_;
+  rclcpp::Publisher<civ_interfaces::msg::ObstacleState>::SharedPtr obstacle_state_publisher_;
 
   /// Patchwork++
   std::unique_ptr<patchwork::PatchWorkpp> Patchworkpp_;

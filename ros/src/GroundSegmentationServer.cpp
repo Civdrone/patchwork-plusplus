@@ -12,6 +12,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <std_msgs/msg/string.hpp>
+#include <civ_interfaces/msg/obstacle_state.hpp>
 
 #include "GroundSegmentationServer.hpp"
 #include "Utils.hpp"
@@ -74,6 +75,8 @@ GroundSegmentationServer::GroundSegmentationServer(const rclcpp::NodeOptions &op
       create_publisher<sensor_msgs::msg::PointCloud2>("/patchworkpp/nonground", qos);
   obstacles_publisher_ =
       create_publisher<sensor_msgs::msg::PointCloud2>("/patchworkpp/obstacles", qos);
+  obstacle_state_publisher_ =
+      create_publisher<civ_interfaces::msg::ObstacleState>("/patchworkpp/obstacle_state", qos);
 
   RCLCPP_INFO(this->get_logger(), "Patchwork++ ROS 2 node initialized");
 }
@@ -105,6 +108,10 @@ void GroundSegmentationServer::PublishClouds(const Eigen::MatrixX3f &est_ground,
       std::move(patchworkpp_ros::utils::EigenMatToPointCloud2(est_nonground, header)));
   obstacles_publisher_->publish(
       std::move(patchworkpp_ros::utils::EigenMatToPointCloud2(est_obstacles, header)));
+
+  civ_interfaces::msg::ObstacleState obstacle_state;
+  obstacle_state.state = (est_obstacles.rows() > 0) ? civ_interfaces::msg::ObstacleState::OBSTACLE : civ_interfaces::msg::ObstacleState::FREE;
+  obstacle_state_publisher_->publish(obstacle_state);
 }
 }  // namespace patchworkpp_ros
 
