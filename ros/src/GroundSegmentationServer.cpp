@@ -76,7 +76,7 @@ GroundSegmentationServer::GroundSegmentationServer(const rclcpp::NodeOptions &op
   obstacles_publisher_ =
       create_publisher<sensor_msgs::msg::PointCloud2>("/patchworkpp/obstacles", qos);
   obstacle_state_publisher_ =
-      create_publisher<civ_interfaces::msg::ObstacleState>("/patchworkpp/obstacle_state", qos);
+      create_publisher<civ_interfaces::msg::ObstacleState>("/civ/obstacle/state", qos);
 
   RCLCPP_INFO(this->get_logger(), "Patchwork++ ROS 2 node initialized");
 }

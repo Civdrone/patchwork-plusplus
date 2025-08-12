@@ -28,6 +28,7 @@ find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
+find_package(civ_interfaces REQUIRED)
 
 # ROS 2 node. gseg: Abbrev. of `g`round `seg`mentation
 add_library(gseg_component SHARED src/GroundSegmentationServer.cpp)
@@ -36,6 +37,7 @@ target_include_directories(gseg_component PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/in
 target_link_libraries(gseg_component ${PARENT_PROJECT_NAME}::${TARGET_NAME})
 ament_target_dependencies(
   gseg_component
+  civ_interfaces
   rcutils
   rclcpp
   rclcpp_components
