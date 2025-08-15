@@ -5,7 +5,7 @@ from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, Pyth
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
-ROUGH_TERRAIN = False
+ROUGH_TERRAIN = True
 
 # Configuration parameters not exposed through the launch system.
 # To modify these values, create your own launch file and modify the 'parameters=' block.
@@ -44,14 +44,25 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration("use_sim_time", default="true")
 
     # tf tree configuration, these are the likely 3 parameters to change and nothing else
-    base_frame = LaunchConfiguration("base_frame", default="base_link")
+    base_frame = LaunchConfiguration("base_frame", default="os_lidar")
 
     # ROS configuration
     pointcloud_topic = LaunchConfiguration("cloud_topic")
-    visualize = LaunchConfiguration("visualize", default="true")
+    visualize = LaunchConfiguration("visualize", default="false")
 
     # Optional ros bag play
     bagfile = LaunchConfiguration("bagfile", default="")
+
+    # LiDAR mounting compensation parameters
+    lidar_compensate_mount = LaunchConfiguration("lidar_compensate_mount", default="false")
+    lidar_mount_roll = LaunchConfiguration("lidar_mount_roll", default="0.0")  # degrees
+    lidar_mount_pitch = LaunchConfiguration("lidar_mount_pitch", default="0.0")  # degrees
+    lidar_mount_yaw = LaunchConfiguration("lidar_mount_yaw", default="0.0")  # degrees
+    lidar_mount_x = LaunchConfiguration("lidar_mount_x", default="0.0")  # meters
+    lidar_mount_y = LaunchConfiguration("lidar_mount_y", default="0.0")  # meters
+    lidar_mount_z = LaunchConfiguration("lidar_mount_z", default="0.0")  # meters
+    lidar_source_frame = LaunchConfiguration("lidar_source_frame", default="os_lidar")
+    lidar_target_frame = LaunchConfiguration("lidar_target_frame", default="os_lidar_corrected")
 
     # Common parameters for all terrain types
     common_params = {
@@ -59,7 +70,7 @@ def generate_launch_description():
         "base_frame": base_frame,
         "use_sim_time": use_sim_time,
         # Patchwork++ configuration
-        "sensor_height": 0.7,  # Need to manually measure the height of the sensor from the ground.
+        "sensor_height": 1.45, #0.7,  # Need to manually measure the height of the sensor from the ground.
         "num_iter": 3,  # Number of iterations for ground plane estimation using PCA.
         "num_min_pts": 0,  # Minimum number of points to be estimated as ground plane in each patch. Default: 0
                           # Some bins on terrain slopes will barely meet this minimum; avoid fitting in regions that are mostly air or sparsely filled.
@@ -70,8 +81,8 @@ def generate_launch_description():
                            # OS1 "Gen2" op-range is 120 m, but for off-road speeds and loader workspace, 60 m balances density and compute.
         "min_range": 0.3,  # min_range of ground estimation area; Default: 1.0
                           # 0.3m is the minimum range at which the sensor can reliably detect objects and provide point cloud data.
-        "obstacle_min_height": 0.3,  # minimum height above ground to consider as obstacle
-        "obstacle_max_radius": 2.0,  # maximum distance from sensor to consider as obstacle
+        "obstacle_min_height": 0.001,  # minimum height above ground to consider as obstacle
+        "obstacle_max_radius": 5.0,  # maximum distance from sensor to consider as obstacle
         "num_sectors_each_zone": [12, 24, 36, 24],  # Setting of Concentric Zone Model(CZM); Default: [16, 32, 54, 32]
                                                     # 32 beams is half of the 64-beam systems tuned in the original tests.
                                                     # Fewer sectors will ensure adequate bin occupancy per sector even in irregular terrain.
@@ -83,6 +94,24 @@ def generate_launch_description():
     # Merge common and terrain-specific parameters
     terrain_params = get_terrain_specific_params(ROUGH_TERRAIN)
     parameters = {**common_params, **terrain_params}
+
+    # Convert degrees to radians for the static transform publisher
+    roll_rad = PythonExpression([lidar_mount_roll, " * 3.14159265359 / 180.0"])
+    pitch_rad = PythonExpression([lidar_mount_pitch, " * 3.14159265359 / 180.0"])
+    yaw_rad = PythonExpression([lidar_mount_yaw, " * 3.14159265359 / 180.0"])
+
+    # Static transform publisher for LiDAR mounting compensation
+    lidar_transform_node = Node(
+        package="tf2_ros",
+        executable="static_transform_publisher",
+        name="lidar_mount_compensation",
+        arguments=[
+            lidar_mount_x, lidar_mount_y, lidar_mount_z,
+            roll_rad, pitch_rad, yaw_rad,
+            lidar_source_frame, lidar_target_frame
+        ],
+        condition=IfCondition(lidar_compensate_mount),
+    )
 
     patchworkpp_node = Node(
         package="patchworkpp",
@@ -115,6 +144,7 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        lidar_transform_node,
         patchworkpp_node,
         rviz_node,
         bagfile_play,
