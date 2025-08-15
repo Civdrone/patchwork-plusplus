@@ -101,14 +101,20 @@ def generate_launch_description():
     yaw_rad = PythonExpression([lidar_mount_yaw, " * 3.14159265359 / 180.0"])
 
     # Static transform publisher for LiDAR mounting compensation
+    # Using modern named parameter format to avoid argument order confusion
     lidar_transform_node = Node(
         package="tf2_ros",
         executable="static_transform_publisher",
         name="lidar_mount_compensation",
         arguments=[
-            lidar_mount_x, lidar_mount_y, lidar_mount_z,
-            roll_rad, pitch_rad, yaw_rad,
-            lidar_source_frame, lidar_target_frame
+            "--x", lidar_mount_x,
+            "--y", lidar_mount_y,
+            "--z", lidar_mount_z,
+            "--roll", roll_rad,
+            "--pitch", pitch_rad,
+            "--yaw", yaw_rad,
+            "--frame-id", lidar_source_frame,
+            "--child-frame-id", lidar_target_frame
         ],
         condition=IfCondition(lidar_compensate_mount),
     )
