@@ -4,6 +4,11 @@
 
 #include <Eigen/Core>
 
+// TF2
+#include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_listener.h>
+#include <tf2_eigen/tf2_eigen.hpp>
+
 // Patchwork++-ROS
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
@@ -45,6 +50,14 @@ GroundSegmentationServer::GroundSegmentationServer(const rclcpp::NodeOptions &op
   params.obstacle_min_height = declare_parameter<double>("obstacle_min_height", params.obstacle_min_height);
   params.obstacle_max_radius = declare_parameter<double>("obstacle_max_radius", params.obstacle_max_radius);
 
+  fov_angle_deg_ = declare_parameter<double>("fov_angle_deg", 360.0);
+  fov_angle_rad_ = fov_angle_deg_ * M_PI / 180.0;
+  target_frame_ = declare_parameter<std::string>("target_frame", "");
+
+  // Initialize TF2
+  tf_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
+  tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
+
   params.verbose = get_parameter<bool>("verbose", params.verbose);
 
   // ToDo. Support intensity
@@ -83,7 +96,10 @@ GroundSegmentationServer::GroundSegmentationServer(const rclcpp::NodeOptions &op
 
 void GroundSegmentationServer::EstimateGround(
     const sensor_msgs::msg::PointCloud2::ConstSharedPtr &msg) {
-  const auto &cloud = patchworkpp_ros::utils::PointCloud2ToEigenMat(msg);
+  const auto &cloud_raw = patchworkpp_ros::utils::PointCloud2ToEigenMat(msg);
+
+  // Apply transformation and FOV filtering
+  const auto &cloud = FilterPointCloudByFOV(cloud_raw, msg->header);
 
   // Estimate ground
   Patchworkpp_->estimateGround(cloud);
@@ -94,6 +110,80 @@ void GroundSegmentationServer::EstimateGround(
   Eigen::MatrixX3f obstacles = Patchworkpp_->getObstacles();
   double time_taken          = Patchworkpp_->getTimeTaken();
   PublishClouds(ground, nonground, obstacles, msg->header);
+}
+
+Eigen::MatrixX3f GroundSegmentationServer::FilterPointCloudByFOV(const Eigen::MatrixX3f &cloud, const std_msgs::msg::Header &header) {
+  Eigen::MatrixX3f working_cloud;
+
+  // Apply TF2 transformation if target frame is specified
+  if (!target_frame_.empty() && target_frame_ != header.frame_id) {
+    try {
+      // Check if transform is available
+      if (tf_buffer_->canTransform(target_frame_, header.frame_id,
+                                   tf2::TimePointZero, tf2::durationFromSec(1.0))) {
+
+        // Get the transform
+        geometry_msgs::msg::TransformStamped transform = tf_buffer_->lookupTransform(
+            target_frame_, header.frame_id, tf2::TimePointZero);
+
+        // Convert to Eigen transform
+        Eigen::Isometry3d eigen_transform = tf2::transformToEigen(transform);
+
+        // Copy and transform points
+        working_cloud = cloud;
+        for (int i = 0; i < cloud.rows(); ++i) {
+          Eigen::Vector3d point(cloud(i, 0), cloud(i, 1), cloud(i, 2));
+          Eigen::Vector3d transformed_point = eigen_transform * point;
+          working_cloud(i, 0) = transformed_point.x();
+          working_cloud(i, 1) = transformed_point.y();
+          working_cloud(i, 2) = transformed_point.z();
+        }
+
+      } else {
+        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                             "Transform from %s to %s not available, using original points",
+                             header.frame_id.c_str(), target_frame_.c_str());
+      }
+    } catch (tf2::TransformException &ex) {
+      RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                           "Transform failed: %s, using original points", ex.what());
+    }
+  } else {
+    // No transformation needed, use original cloud
+    working_cloud = cloud;
+  }
+
+  // Apply FOV filtering on (possibly transformed) points
+  if (fov_angle_deg_ >= 360.0) {
+    // No filtering needed if FOV is 360 degrees or more
+    return working_cloud;
+  }
+
+  std::vector<int> valid_indices;
+  valid_indices.reserve(working_cloud.rows());
+
+  const double half_fov = fov_angle_rad_ / 2.0;
+
+  for (int i = 0; i < working_cloud.rows(); ++i) {
+    const double x = working_cloud(i, 0);
+    const double y = working_cloud(i, 1);
+
+    // Calculate angle from positive x-axis in x-y plane
+    const double angle = std::atan2(y, x);
+
+    // Check if point is within FOV (symmetric around positive x-axis)
+    if (std::abs(angle) <= half_fov) {
+      valid_indices.push_back(i);
+    }
+  }
+
+  // Create filtered cloud
+  Eigen::MatrixX3f filtered_cloud(valid_indices.size(), 3);
+  for (size_t i = 0; i < valid_indices.size(); ++i) {
+    filtered_cloud.row(i) = working_cloud.row(valid_indices[i]);
+  }
+
+  return filtered_cloud;
 }
 
 void GroundSegmentationServer::PublishClouds(const Eigen::MatrixX3f &est_ground,

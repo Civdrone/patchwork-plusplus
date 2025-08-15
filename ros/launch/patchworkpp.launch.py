@@ -50,6 +50,9 @@ def generate_launch_description():
     pointcloud_topic = LaunchConfiguration("cloud_topic")
     visualize = LaunchConfiguration("visualize", default="false")
 
+    # Target frame for coordinate transformation and FOV filtering
+    target_frame = LaunchConfiguration("target_frame", default="ouster_transformed")
+
     # Optional ros bag play
     bagfile = LaunchConfiguration("bagfile", default="")
 
@@ -83,6 +86,7 @@ def generate_launch_description():
                           # 0.3m is the minimum range at which the sensor can reliably detect objects and provide point cloud data.
         "obstacle_min_height": 0.001,  # minimum height above ground to consider as obstacle
         "obstacle_max_radius": 5.0,  # maximum distance from sensor to consider as obstacle
+        "fov_angle_deg": 120.0,  # Field of view angle in degrees (±60° from positive x-axis)
         "num_sectors_each_zone": [12, 24, 36, 24],  # Setting of Concentric Zone Model(CZM); Default: [16, 32, 54, 32]
                                                     # 32 beams is half of the 64-beam systems tuned in the original tests.
                                                     # Fewer sectors will ensure adequate bin occupancy per sector even in irregular terrain.
@@ -118,6 +122,9 @@ def generate_launch_description():
         ],
         condition=IfCondition(lidar_compensate_mount),
     )
+
+    # Add target frame parameter for transformation and FOV filtering
+    parameters["target_frame"] = target_frame
 
     patchworkpp_node = Node(
         package="patchworkpp",

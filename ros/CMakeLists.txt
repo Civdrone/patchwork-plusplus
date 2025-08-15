@@ -28,6 +28,8 @@ find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
+find_package(tf2_eigen REQUIRED)
+find_package(tf2_sensor_msgs REQUIRED)
 find_package(civ_interfaces REQUIRED)
 
 # ROS 2 node. gseg: Abbrev. of `g`round `seg`mentation
@@ -44,7 +46,8 @@ ament_target_dependencies(
   nav_msgs
   sensor_msgs
   geometry_msgs
-  tf2_ros)
+  tf2_ros
+  tf2_eigen)
 
 rclcpp_components_register_node(gseg_component PLUGIN "patchworkpp_ros::GroundSegmentationServer" EXECUTABLE patchworkpp_node)
 
