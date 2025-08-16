@@ -32,6 +32,9 @@ class GroundSegmentationServer : public rclcpp::Node {
   /// Filter point cloud based on FOV angle from positive x-axis (after transformation)
   Eigen::MatrixX3f FilterPointCloudByFOV(const Eigen::MatrixX3f &cloud, const std_msgs::msg::Header &header);
 
+  /// Get the correct frame_id for published point clouds
+  std::string GetOutputFrameId() const;
+
  private:
   /// Data subscribers.
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_sub_;

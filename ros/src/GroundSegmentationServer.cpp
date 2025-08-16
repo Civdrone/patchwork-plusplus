@@ -103,7 +103,11 @@ void GroundSegmentationServer::EstimateGround(
 
   // Estimate ground
   Patchworkpp_->estimateGround(cloud);
-  cloud_publisher_->publish(patchworkpp_ros::utils::EigenMatToPointCloud2(cloud, msg->header));
+
+  // Create header with correct frame_id for transformed points
+  std_msgs::msg::Header output_header = msg->header;
+  output_header.frame_id = GetOutputFrameId();
+  cloud_publisher_->publish(patchworkpp_ros::utils::EigenMatToPointCloud2(cloud, output_header));
   // Get ground and nonground
   Eigen::MatrixX3f ground    = Patchworkpp_->getGround();
   Eigen::MatrixX3f nonground = Patchworkpp_->getNonground();
@@ -120,11 +124,11 @@ Eigen::MatrixX3f GroundSegmentationServer::FilterPointCloudByFOV(const Eigen::Ma
     try {
       // Check if transform is available (wait longer for static transforms)
       if (tf_buffer_->canTransform(target_frame_, header.frame_id,
-                                   tf2::TimePointZero, tf2::durationFromSec(5.0))) {
+                                   header.stamp, tf2::durationFromSec(5.0))) {
 
         // Get the transform
         geometry_msgs::msg::TransformStamped transform = tf_buffer_->lookupTransform(
-            target_frame_, header.frame_id, tf2::TimePointZero);
+            target_frame_, header.frame_id, header.stamp);
 
         // Convert to Eigen transform
         Eigen::Isometry3d eigen_transform = tf2::transformToEigen(transform);
@@ -186,12 +190,18 @@ Eigen::MatrixX3f GroundSegmentationServer::FilterPointCloudByFOV(const Eigen::Ma
   return filtered_cloud;
 }
 
+std::string GroundSegmentationServer::GetOutputFrameId() const {
+  // If we're transforming to a target frame, use that frame for output
+  // Otherwise, use the base_frame
+  return (!target_frame_.empty()) ? target_frame_ : base_frame_;
+}
+
 void GroundSegmentationServer::PublishClouds(const Eigen::MatrixX3f &est_ground,
                                              const Eigen::MatrixX3f &est_nonground,
                                              const Eigen::MatrixX3f &est_obstacles,
                                              const std_msgs::msg::Header header_msg) {
   std_msgs::msg::Header header = header_msg;
-  header.frame_id              = base_frame_;
+  header.frame_id              = GetOutputFrameId();
   ground_publisher_->publish(
       std::move(patchworkpp_ros::utils::EigenMatToPointCloud2(est_ground, header)));
   nonground_publisher_->publish(
