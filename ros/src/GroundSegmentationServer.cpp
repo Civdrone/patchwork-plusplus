@@ -118,9 +118,9 @@ Eigen::MatrixX3f GroundSegmentationServer::FilterPointCloudByFOV(const Eigen::Ma
   // Apply TF2 transformation if target frame is specified
   if (!target_frame_.empty() && target_frame_ != header.frame_id) {
     try {
-      // Check if transform is available
+      // Check if transform is available (wait longer for static transforms)
       if (tf_buffer_->canTransform(target_frame_, header.frame_id,
-                                   tf2::TimePointZero, tf2::durationFromSec(1.0))) {
+                                   tf2::TimePointZero, tf2::durationFromSec(5.0))) {
 
         // Get the transform
         geometry_msgs::msg::TransformStamped transform = tf_buffer_->lookupTransform(

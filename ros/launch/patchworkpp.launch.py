@@ -50,6 +50,9 @@ def generate_launch_description():
     pointcloud_topic = LaunchConfiguration("cloud_topic")
     visualize = LaunchConfiguration("visualize", default="false")
 
+    # Target frame for FOV filtering (can be different from lidar_target_frame)
+    target_frame = LaunchConfiguration("target_frame", default="ouster_transformed")
+
     # Optional ros bag play
     bagfile = LaunchConfiguration("bagfile", default="")
 
@@ -121,7 +124,7 @@ def generate_launch_description():
     )
 
     # Add target frame parameter for transformation and FOV filtering
-    parameters["target_frame"] = lidar_target_frame
+    parameters["target_frame"] = target_frame
 
     patchworkpp_node = Node(
         package="patchworkpp",
