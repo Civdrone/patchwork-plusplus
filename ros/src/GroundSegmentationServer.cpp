@@ -54,6 +54,10 @@ GroundSegmentationServer::GroundSegmentationServer(const rclcpp::NodeOptions &op
   fov_angle_rad_ = fov_angle_deg_ * M_PI / 180.0;
   target_frame_ = declare_parameter<std::string>("target_frame", "");
 
+  // Obstacle clustering parameters
+  cluster_tolerance_ = declare_parameter<double>("cluster_tolerance", 0.5);
+  min_cluster_size_ = declare_parameter<int>("min_cluster_size", 5);
+
   // Initialize TF2
   tf_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
   tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
@@ -111,9 +115,13 @@ void GroundSegmentationServer::EstimateGround(
   // Get ground and nonground
   Eigen::MatrixX3f ground    = Patchworkpp_->getGround();
   Eigen::MatrixX3f nonground = Patchworkpp_->getNonground();
-  Eigen::MatrixX3f obstacles = Patchworkpp_->getObstacles();
-  double time_taken          = Patchworkpp_->getTimeTaken();
-  PublishClouds(ground, nonground, obstacles, msg->header);
+  Eigen::MatrixX3f obstacles_raw = Patchworkpp_->getObstacles();
+
+  // Apply clustering to filter small obstacle clusters
+  Eigen::MatrixX3f obstacles_filtered = FilterObstaclesByClusterSize(obstacles_raw);
+
+  double time_taken = Patchworkpp_->getTimeTaken();
+  PublishClouds(ground, nonground, obstacles_filtered, msg->header);
 }
 
 Eigen::MatrixX3f GroundSegmentationServer::FilterPointCloudByFOV(const Eigen::MatrixX3f &cloud, const std_msgs::msg::Header &header) {
@@ -194,6 +202,61 @@ std::string GroundSegmentationServer::GetOutputFrameId() const {
   // If we're transforming to a target frame, use that frame for output
   // Otherwise, use the base_frame
   return (!target_frame_.empty()) ? target_frame_ : base_frame_;
+}
+
+Eigen::MatrixX3f GroundSegmentationServer::FilterObstaclesByClusterSize(const Eigen::MatrixX3f &obstacles) {
+  if (obstacles.rows() == 0) {
+    return obstacles;
+  }
+
+  // Convert Eigen matrix to PCL point cloud
+  pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
+  cloud->points.reserve(obstacles.rows());
+
+  for (int i = 0; i < obstacles.rows(); ++i) {
+    pcl::PointXYZ point;
+    point.x = obstacles(i, 0);
+    point.y = obstacles(i, 1);
+    point.z = obstacles(i, 2);
+    cloud->points.push_back(point);
+  }
+  cloud->width = cloud->points.size();
+  cloud->height = 1;
+  cloud->is_dense = true;
+
+  // Create KD-Tree for efficient nearest neighbor search
+  pcl::search::KdTree<pcl::PointXYZ>::Ptr tree(new pcl::search::KdTree<pcl::PointXYZ>);
+  tree->setInputCloud(cloud);
+
+  // Perform Euclidean clustering
+  std::vector<pcl::PointIndices> cluster_indices;
+  pcl::EuclideanClusterExtraction<pcl::PointXYZ> ec;
+  ec.setClusterTolerance(cluster_tolerance_);
+  ec.setMinClusterSize(min_cluster_size_);
+  ec.setMaxClusterSize(obstacles.rows()); // No upper limit
+  ec.setSearchMethod(tree);
+  ec.setInputCloud(cloud);
+  ec.extract(cluster_indices);
+
+  // Build filtered obstacle cloud from valid clusters
+  std::vector<int> valid_indices;
+  for (const auto& cluster : cluster_indices) {
+    valid_indices.insert(valid_indices.end(), cluster.indices.begin(), cluster.indices.end());
+  }
+
+  if (valid_indices.empty()) {
+    return Eigen::MatrixX3f(0, 3);
+  }
+
+  // Convert back to Eigen matrix
+  Eigen::MatrixX3f filtered_obstacles(valid_indices.size(), 3);
+  for (size_t i = 0; i < valid_indices.size(); ++i) {
+    filtered_obstacles(i, 0) = cloud->points[valid_indices[i]].x;
+    filtered_obstacles(i, 1) = cloud->points[valid_indices[i]].y;
+    filtered_obstacles(i, 2) = cloud->points[valid_indices[i]].z;
+  }
+
+  return filtered_obstacles;
 }
 
 void GroundSegmentationServer::PublishClouds(const Eigen::MatrixX3f &est_ground,

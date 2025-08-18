@@ -7,6 +7,12 @@
 #include <rclcpp/rclcpp.hpp>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
+
+// PCL
+#include <pcl/point_cloud.h>
+#include <pcl/point_types.h>
+#include <pcl/segmentation/extract_clusters.h>
+#include <pcl/kdtree/kdtree.h>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <std_msgs/msg/header.hpp>
 #include <civ_interfaces/msg/obstacle_state.hpp>
@@ -35,6 +41,9 @@ class GroundSegmentationServer : public rclcpp::Node {
   /// Get the correct frame_id for published point clouds
   std::string GetOutputFrameId() const;
 
+  /// Apply clustering to obstacle points and filter small clusters
+  Eigen::MatrixX3f FilterObstaclesByClusterSize(const Eigen::MatrixX3f &obstacles);
+
  private:
   /// Data subscribers.
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_sub_;
@@ -55,6 +64,10 @@ class GroundSegmentationServer : public rclcpp::Node {
   double fov_angle_deg_;
   double fov_angle_rad_;
   std::string target_frame_;
+
+  /// Obstacle clustering parameters
+  double cluster_tolerance_;
+  int min_cluster_size_;
 
   /// TF2 for coordinate transformation
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;

@@ -31,12 +31,18 @@ find_package(tf2_ros REQUIRED)
 find_package(tf2_eigen REQUIRED)
 find_package(tf2_sensor_msgs REQUIRED)
 find_package(civ_interfaces REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(PCL_PKGCONF REQUIRED pcl_common pcl_search pcl_segmentation pcl_kdtree)
+# Use only the include directories and manually specify libraries
+set(PCL_INCLUDE_DIRS ${PCL_PKGCONF_INCLUDE_DIRS})
+set(PCL_LIBRARIES "-lpcl_common -lpcl_search -lpcl_segmentation -lpcl_kdtree")
 
 # ROS 2 node. gseg: Abbrev. of `g`round `seg`mentation
 add_library(gseg_component SHARED src/GroundSegmentationServer.cpp)
 target_compile_features(gseg_component PUBLIC cxx_std_20)
 target_include_directories(gseg_component PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(gseg_component ${PARENT_PROJECT_NAME}::${TARGET_NAME})
+target_link_libraries(gseg_component ${PARENT_PROJECT_NAME}::${TARGET_NAME} ${PCL_LIBRARIES})
+target_include_directories(gseg_component PRIVATE ${PCL_INCLUDE_DIRS})
 ament_target_dependencies(
   gseg_component
   civ_interfaces
