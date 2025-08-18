@@ -44,6 +44,10 @@ class GroundSegmentationServer : public rclcpp::Node {
   /// Apply clustering to obstacle points and filter small clusters
   Eigen::MatrixX3f FilterObstaclesByClusterSize(const Eigen::MatrixX3f &obstacles);
 
+  /// Track persistent clusters across frames and return validated obstacles
+  Eigen::MatrixX3f TrackPersistentClusters(const std::vector<pcl::PointIndices> &cluster_indices,
+                                           const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud);
+
  private:
   /// Data subscribers.
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_sub_;
@@ -68,10 +72,24 @@ class GroundSegmentationServer : public rclcpp::Node {
   /// Obstacle clustering parameters
   double cluster_tolerance_;
   int min_cluster_size_;
+  int min_frames_for_obstacle_;
+  double max_cluster_distance_;
 
   /// TF2 for coordinate transformation
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
+
+  /// Persistent cluster tracking
+  struct ClusterInfo {
+    Eigen::Vector3f center;
+    int frame_count;
+    std::vector<Eigen::Vector3f> points;
+
+    ClusterInfo(const Eigen::Vector3f& c, const std::vector<Eigen::Vector3f>& pts)
+      : center(c), frame_count(1), points(pts) {}
+  };
+
+  std::vector<ClusterInfo> persistent_clusters_;
 };
 
 }  // namespace patchworkpp_ros

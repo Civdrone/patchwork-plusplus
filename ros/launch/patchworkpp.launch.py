@@ -88,6 +88,8 @@ def generate_launch_description():
         "obstacle_max_radius": 5.0,  # maximum distance from sensor to consider as obstacle
         "cluster_tolerance": 0.5,  # maximum distance between points in same cluster (meters)
         "min_cluster_size": 5,  # minimum number of points required to keep an obstacle cluster
+        "min_frames_for_obstacle": 3,  # minimum number of consecutive frames to confirm obstacle persistence
+        "max_cluster_distance": 1.0,  # maximum distance to match clusters between frames (meters)
         "fov_angle_deg": 120.0,  # Field of view angle in degrees (±60° from positive x-axis)
         "num_sectors_each_zone": [12, 24, 36, 24],  # Setting of Concentric Zone Model(CZM); Default: [16, 32, 54, 32]
                                                     # 32 beams is half of the 64-beam systems tuned in the original tests.
