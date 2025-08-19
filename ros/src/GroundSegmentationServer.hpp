@@ -72,6 +72,7 @@ class GroundSegmentationServer : public rclcpp::Node {
   /// Obstacle clustering parameters
   double cluster_tolerance_;
   int min_cluster_size_;
+  bool enable_persistent_tracking_;
   int min_frames_for_obstacle_;
   double max_cluster_distance_;
 
@@ -83,11 +84,14 @@ class GroundSegmentationServer : public rclcpp::Node {
   struct ClusterInfo {
     Eigen::Vector3f center;
     int frame_count;
-    std::vector<Eigen::Vector3f> points;
+    size_t point_count;
+    int last_seen_frame;
 
-    ClusterInfo(const Eigen::Vector3f& c, const std::vector<Eigen::Vector3f>& pts)
-      : center(c), frame_count(1), points(pts) {}
+    ClusterInfo(const Eigen::Vector3f& c, size_t count, int frame)
+      : center(c), frame_count(1), point_count(count), last_seen_frame(frame) {}
   };
+  
+  int current_frame_id_;
 
   std::vector<ClusterInfo> persistent_clusters_;
 };

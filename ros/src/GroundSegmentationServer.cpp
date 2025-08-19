@@ -57,8 +57,10 @@ GroundSegmentationServer::GroundSegmentationServer(const rclcpp::NodeOptions &op
   // Obstacle clustering parameters
   cluster_tolerance_ = declare_parameter<double>("cluster_tolerance", 0.5);
   min_cluster_size_ = declare_parameter<int>("min_cluster_size", 5);
+  enable_persistent_tracking_ = declare_parameter<bool>("enable_persistent_tracking", false);
   min_frames_for_obstacle_ = declare_parameter<int>("min_frames_for_obstacle", 3);
   max_cluster_distance_ = declare_parameter<double>("max_cluster_distance", 1.0);
+  current_frame_id_ = 0;
 
   // Initialize TF2
   tf_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
@@ -240,8 +242,30 @@ Eigen::MatrixX3f GroundSegmentationServer::FilterObstaclesByClusterSize(const Ei
   ec.setInputCloud(cloud);
   ec.extract(cluster_indices);
 
-  // Track persistent clusters across frames
-  return TrackPersistentClusters(cluster_indices, cloud);
+  if (enable_persistent_tracking_) {
+    // Track persistent clusters across frames
+    return TrackPersistentClusters(cluster_indices, cloud);
+  } else {
+    // Build filtered obstacle cloud from valid clusters (fast path)
+    std::vector<int> valid_indices;
+    for (const auto& cluster : cluster_indices) {
+      valid_indices.insert(valid_indices.end(), cluster.indices.begin(), cluster.indices.end());
+    }
+    
+    if (valid_indices.empty()) {
+      return Eigen::MatrixX3f(0, 3);
+    }
+    
+    // Convert back to Eigen matrix
+    Eigen::MatrixX3f filtered_obstacles(valid_indices.size(), 3);
+    for (size_t i = 0; i < valid_indices.size(); ++i) {
+      filtered_obstacles(i, 0) = cloud->points[valid_indices[i]].x;
+      filtered_obstacles(i, 1) = cloud->points[valid_indices[i]].y;
+      filtered_obstacles(i, 2) = cloud->points[valid_indices[i]].z;
+    }
+    
+    return filtered_obstacles;
+  }
 }
 
 Eigen::MatrixX3f GroundSegmentationServer::TrackPersistentClusters(
@@ -249,115 +273,151 @@ Eigen::MatrixX3f GroundSegmentationServer::TrackPersistentClusters(
     const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud) {
 
   if (!cloud || cloud->points.empty()) {
-    RCLCPP_WARN(this->get_logger(), "TrackPersistentClusters: Invalid or empty cloud");
     return Eigen::MatrixX3f(0, 3);
   }
 
-  RCLCPP_DEBUG(this->get_logger(), "TrackPersistentClusters: %zu input clusters, %zu persistent clusters", 
-               cluster_indices.size(), persistent_clusters_.size());
+  // Safety fallback: if persistent tracking causes issues, fall back to simple clustering
+  try {
+    current_frame_id_++;
+    
+    RCLCPP_DEBUG(this->get_logger(), "TrackPersistentClusters: frame %d, %zu input clusters, %zu persistent clusters", 
+                 current_frame_id_, cluster_indices.size(), persistent_clusters_.size());
+  } catch (const std::exception& e) {
+    RCLCPP_ERROR(this->get_logger(), "Exception in persistent tracking, falling back: %s", e.what());
+    // Fall back to simple clustering
+    std::vector<int> valid_indices;
+    for (const auto& cluster : cluster_indices) {
+      valid_indices.insert(valid_indices.end(), cluster.indices.begin(), cluster.indices.end());
+    }
+    
+    if (valid_indices.empty()) {
+      return Eigen::MatrixX3f(0, 3);
+    }
+    
+    Eigen::MatrixX3f filtered_obstacles(valid_indices.size(), 3);
+    for (size_t i = 0; i < valid_indices.size(); ++i) {
+      filtered_obstacles(i, 0) = cloud->points[valid_indices[i]].x;
+      filtered_obstacles(i, 1) = cloud->points[valid_indices[i]].y;
+      filtered_obstacles(i, 2) = cloud->points[valid_indices[i]].z;
+    }
+    return filtered_obstacles;
+  }
   
-  std::vector<ClusterInfo> current_clusters;
+  // Extract current frame cluster centers (lightweight)
+  std::vector<std::pair<Eigen::Vector3f, std::vector<int>>> current_clusters;
+  current_clusters.reserve(cluster_indices.size());
 
-  // Extract cluster centers and point indices for current frame
   for (const auto& cluster : cluster_indices) {
     if (cluster.indices.size() < static_cast<size_t>(min_cluster_size_)) {
       continue;
     }
 
-    // Calculate cluster center and store points
+    // Calculate cluster center only
     Eigen::Vector3f center(0.0f, 0.0f, 0.0f);
-    std::vector<Eigen::Vector3f> cluster_points;
-    cluster_points.reserve(cluster.indices.size());
+    std::vector<int> valid_indices;
     
     for (int idx : cluster.indices) {
-      if (idx < 0 || static_cast<size_t>(idx) >= cloud->points.size()) {
-        RCLCPP_WARN(this->get_logger(), "Invalid point index: %d, cloud size: %zu", idx, cloud->points.size());
-        continue;
+      if (idx >= 0 && static_cast<size_t>(idx) < cloud->points.size()) {
+        const auto& point = cloud->points[idx];
+        center.x() += point.x;
+        center.y() += point.y;
+        center.z() += point.z;
+        valid_indices.push_back(idx);
       }
-      const auto& point = cloud->points[idx];
-      center.x() += point.x;
-      center.y() += point.y;
-      center.z() += point.z;
-      cluster_points.emplace_back(point.x, point.y, point.z);
     }
-    if (!cluster_points.empty()) {
-      center /= static_cast<float>(cluster_points.size());
-      current_clusters.emplace_back(center, cluster_points);
+    
+    if (!valid_indices.empty()) {
+      center /= static_cast<float>(valid_indices.size());
+      current_clusters.emplace_back(center, std::move(valid_indices));
     }
   }
 
-  // Match current clusters with persistent clusters
-  std::vector<bool> matched_persistent(persistent_clusters_.size(), false);
-  std::vector<bool> matched_current(current_clusters.size(), false);
+  // Efficient matching using squared distances to avoid sqrt
+  const float max_distance_sq = max_cluster_distance_ * max_cluster_distance_;
+  std::vector<bool> matched(persistent_clusters_.size(), false);
 
-  // Update existing persistent clusters
-  for (size_t i = 0; i < current_clusters.size(); ++i) {
-    float min_distance = std::numeric_limits<float>::max();
+  // Update persistent clusters
+  for (const auto& current : current_clusters) {
     int best_match = -1;
+    float min_distance_sq = max_distance_sq;
 
+    // Find closest persistent cluster
     for (size_t j = 0; j < persistent_clusters_.size(); ++j) {
-      if (matched_persistent[j]) continue;
-
-      float distance = (current_clusters[i].center - persistent_clusters_[j].center).norm();
-      if (distance < max_cluster_distance_ && distance < min_distance) {
-        min_distance = distance;
+      if (matched[j]) continue;
+      
+      const Eigen::Vector3f diff = current.first - persistent_clusters_[j].center;
+      const float distance_sq = diff.squaredNorm();
+      
+      if (distance_sq < min_distance_sq) {
+        min_distance_sq = distance_sq;
         best_match = j;
       }
     }
 
     if (best_match >= 0) {
-      // Update existing persistent cluster
-      persistent_clusters_[best_match].center = current_clusters[i].center;
-      persistent_clusters_[best_match].points = current_clusters[i].points;
+      // Update existing cluster
+      persistent_clusters_[best_match].center = current.first;
+      persistent_clusters_[best_match].point_count = current.second.size();
       persistent_clusters_[best_match].frame_count++;
-      matched_persistent[best_match] = true;
-      matched_current[i] = true;
+      persistent_clusters_[best_match].last_seen_frame = current_frame_id_;
+      matched[best_match] = true;
+    } else {
+      // Add new cluster
+      persistent_clusters_.emplace_back(current.first, current.second.size(), current_frame_id_);
     }
   }
 
-  // Add new clusters to persistent tracking
-  for (size_t i = 0; i < current_clusters.size(); ++i) {
-    if (!matched_current[i]) {
-      persistent_clusters_.push_back(current_clusters[i]);
+  // Remove old clusters (not seen for too long)
+  if (!persistent_clusters_.empty()) {
+    auto it = persistent_clusters_.begin();
+    while (it != persistent_clusters_.end()) {
+      if (current_frame_id_ - it->last_seen_frame > 2) {  // Remove if not seen for 2+ frames
+        it = persistent_clusters_.erase(it);
+      } else {
+        ++it;
+      }
     }
   }
 
-  // Remove clusters that weren't matched (they disappeared)
-  for (int i = static_cast<int>(persistent_clusters_.size()) - 1; i >= 0; --i) {
-    if (static_cast<size_t>(i) < matched_persistent.size() && !matched_persistent[i]) {
-      persistent_clusters_.erase(persistent_clusters_.begin() + i);
+  // Build result from valid persistent clusters
+  std::vector<int> valid_cluster_indices;
+  for (const auto& current : current_clusters) {
+    // Check if this cluster matches a valid persistent cluster
+    for (const auto& persistent : persistent_clusters_) {
+      if (persistent.frame_count >= min_frames_for_obstacle_) {
+        const float distance_sq = (current.first - persistent.center).squaredNorm();
+        if (distance_sq < max_distance_sq) {
+          valid_cluster_indices.insert(valid_cluster_indices.end(),
+                                     current.second.begin(),
+                                     current.second.end());
+          break;
+        }
+      }
     }
   }
 
-  // Build result from clusters that meet minimum frame requirement
-  std::vector<Eigen::Vector3f> valid_points;
-  int valid_clusters = 0;
-  for (const auto& cluster : persistent_clusters_) {
-    RCLCPP_DEBUG(this->get_logger(), "Cluster frame_count: %d, required: %d", 
-                cluster.frame_count, min_frames_for_obstacle_);
-    if (cluster.frame_count >= min_frames_for_obstacle_) {
-      valid_points.insert(valid_points.end(),
-                          cluster.points.begin(),
-                          cluster.points.end());
-      valid_clusters++;
-    }
-  }
-  
-  RCLCPP_INFO(this->get_logger(), "Valid clusters: %d, total points: %zu", valid_clusters, valid_points.size());
-
-  if (valid_points.empty()) {
+  if (valid_cluster_indices.empty()) {
     return Eigen::MatrixX3f(0, 3);
   }
 
-  // Convert back to Eigen matrix
-  Eigen::MatrixX3f persistent_obstacles(valid_points.size(), 3);
-  for (size_t i = 0; i < valid_points.size(); ++i) {
-    persistent_obstacles(i, 0) = valid_points[i].x();
-    persistent_obstacles(i, 1) = valid_points[i].y();
-    persistent_obstacles(i, 2) = valid_points[i].z();
+  // Convert to Eigen matrix
+  Eigen::MatrixX3f result(valid_cluster_indices.size(), 3);
+  for (size_t i = 0; i < valid_cluster_indices.size(); ++i) {
+    int idx = valid_cluster_indices[i];
+    if (idx >= 0 && static_cast<size_t>(idx) < cloud->points.size()) {
+      const auto& point = cloud->points[idx];
+      result(i, 0) = point.x;
+      result(i, 1) = point.y;
+      result(i, 2) = point.z;
+    } else {
+      RCLCPP_ERROR(this->get_logger(), "Invalid point index in result: %d, cloud size: %zu", idx, cloud->points.size());
+      result(i, 0) = 0.0f;
+      result(i, 1) = 0.0f;
+      result(i, 2) = 0.0f;
+    }
   }
-
-  return persistent_obstacles;
+  
+  return result;
 }
 
 void GroundSegmentationServer::PublishClouds(const Eigen::MatrixX3f &est_ground,
