@@ -61,6 +61,7 @@ GroundSegmentationServer::GroundSegmentationServer(const rclcpp::NodeOptions &op
   min_frames_for_obstacle_ = declare_parameter<int>("min_frames_for_obstacle", 3);
   max_cluster_distance_ = declare_parameter<double>("max_cluster_distance", 1.0);
   current_frame_id_ = 0;
+  transform_cached_ = false;
 
   // Initialize TF2
   tf_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
@@ -134,35 +135,46 @@ Eigen::MatrixX3f GroundSegmentationServer::FilterPointCloudByFOV(const Eigen::Ma
   // Apply TF2 transformation if target frame is specified
   if (!target_frame_.empty() && target_frame_ != header.frame_id) {
     try {
-      // Check if transform is available (wait longer for static transforms)
-      if (tf_buffer_->canTransform(target_frame_, header.frame_id,
-                                   header.stamp, tf2::durationFromSec(5.0))) {
+      // Use cached transform for static transforms
+      std::string transform_key = header.frame_id + "->" + target_frame_;
 
-        // Get the transform
-        geometry_msgs::msg::TransformStamped transform = tf_buffer_->lookupTransform(
-            target_frame_, header.frame_id, header.stamp);
-
-        // Convert to Eigen transform
-        Eigen::Isometry3d eigen_transform = tf2::transformToEigen(transform);
-
-        // Copy and transform points
-        working_cloud = cloud;
-        for (int i = 0; i < cloud.rows(); ++i) {
-          Eigen::Vector3d point(cloud(i, 0), cloud(i, 1), cloud(i, 2));
-          Eigen::Vector3d transformed_point = eigen_transform * point;
-          working_cloud(i, 0) = transformed_point.x();
-          working_cloud(i, 1) = transformed_point.y();
-          working_cloud(i, 2) = transformed_point.z();
+      if (!transform_cached_ || cached_transform_key_ != transform_key) {
+        // Check if transform is available (wait longer for static transforms)
+        if (tf_buffer_->canTransform(target_frame_, header.frame_id,
+                                     header.stamp, tf2::durationFromSec(5.0))) {
+          // Get and cache the transform
+          geometry_msgs::msg::TransformStamped transform = tf_buffer_->lookupTransform(
+              target_frame_, header.frame_id, header.stamp);
+          cached_transform_ = tf2::transformToEigen(transform);
+          cached_transform_key_ = transform_key;
+          transform_cached_ = true;
+        } else {
+          RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                               "Transform from %s to %s not available, using original points",
+                               header.frame_id.c_str(), target_frame_.c_str());
+          working_cloud = cloud;
         }
-
-      } else {
-        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
-                             "Transform from %s to %s not available, using original points",
-                             header.frame_id.c_str(), target_frame_.c_str());
       }
+
+      if (transform_cached_) {
+        // Pre-compute matrix multiplication components
+        const auto& R = cached_transform_.linear();
+        const auto& t = cached_transform_.translation();
+
+        // Apply transformation efficiently
+        working_cloud.resize(cloud.rows(), cloud.cols());
+        for (int i = 0; i < cloud.rows(); ++i) {
+          // Direct matrix operations (faster than Vector3d construction)
+          Eigen::Vector3d point = cloud.row(i).cast<double>();
+          Eigen::Vector3d transformed_point = R * point + t;
+          working_cloud.row(i) = transformed_point.cast<float>();
+        }
+      }
+
     } catch (tf2::TransformException &ex) {
       RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
                            "Transform failed: %s, using original points", ex.what());
+      working_cloud = cloud;
     }
   } else {
     // No transformation needed, use original cloud
@@ -175,25 +187,33 @@ Eigen::MatrixX3f GroundSegmentationServer::FilterPointCloudByFOV(const Eigen::Ma
     return working_cloud;
   }
 
+  // Pre-compute trigonometric values for FOV
+  const float half_fov = static_cast<float>(fov_angle_rad_ / 2.0);
+  const float cos_half_fov = std::cos(half_fov);
+
   std::vector<int> valid_indices;
   valid_indices.reserve(working_cloud.rows());
 
-  const double half_fov = fov_angle_rad_ / 2.0;
-
   for (int i = 0; i < working_cloud.rows(); ++i) {
-    const double x = working_cloud(i, 0);
-    const double y = working_cloud(i, 1);
+    const float x = working_cloud(i, 0);
+    const float y = working_cloud(i, 1);
 
-    // Calculate angle from positive x-axis in x-y plane
-    const double angle = std::atan2(y, x);
-
-    // Check if point is within FOV (symmetric around positive x-axis)
-    if (std::abs(angle) <= half_fov) {
-      valid_indices.push_back(i);
+    // Fast FOV check using dot product instead of atan2
+    // Point is within FOV if cos(angle) >= cos(half_fov)
+    const float magnitude_sq = x * x + y * y;
+    if (magnitude_sq > 0.0f) {
+      const float cos_angle = x / std::sqrt(magnitude_sq);
+      if (cos_angle >= cos_half_fov) {
+        valid_indices.push_back(i);
+      }
     }
   }
 
-  // Create filtered cloud
+  // Create filtered cloud efficiently
+  if (valid_indices.empty()) {
+    return Eigen::MatrixX3f(0, 3);
+  }
+
   Eigen::MatrixX3f filtered_cloud(valid_indices.size(), 3);
   for (size_t i = 0; i < valid_indices.size(); ++i) {
     filtered_cloud.row(i) = working_cloud.row(valid_indices[i]);

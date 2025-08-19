@@ -80,6 +80,11 @@ class GroundSegmentationServer : public rclcpp::Node {
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
+  /// Cached transform for performance
+  mutable Eigen::Isometry3d cached_transform_;
+  mutable std::string cached_transform_key_;
+  mutable bool transform_cached_;
+
   /// Persistent cluster tracking
   struct ClusterInfo {
     Eigen::Vector3f center;
