@@ -91,6 +91,11 @@ def generate_launch_description():
         "enable_persistent_tracking": True,  # enable/disable persistent cluster tracking across frames
         "min_frames_for_obstacle": 3,  # minimum number of consecutive frames to confirm obstacle persistence
         "max_cluster_distance": 1.0,  # maximum distance to match clusters between frames (meters)
+        "use_simple_obstacle_detection": False,  # use simple height/distance thresholding instead of Patchwork++
+        "simple_obstacle_min_height": 0.2,  # minimum height above ground for simple obstacle detection (meters)
+        "simple_obstacle_max_height": 3.0,  # maximum height above ground for simple obstacle detection (meters)
+        "simple_obstacle_max_distance": 5.0,  # maximum distance for simple obstacle detection (meters)
+        "debug_logging": False,  # enable detailed debug logging for troubleshooting
         "fov_angle_deg": 120.0,  # Field of view angle in degrees (±60° from positive x-axis)
         "num_sectors_each_zone": [12, 24, 36, 24],  # Setting of Concentric Zone Model(CZM); Default: [16, 32, 54, 32]
                                                     # 32 beams is half of the 64-beam systems tuned in the original tests.

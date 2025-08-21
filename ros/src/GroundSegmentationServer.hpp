@@ -48,6 +48,9 @@ class GroundSegmentationServer : public rclcpp::Node {
   Eigen::MatrixX3f TrackPersistentClusters(const std::vector<pcl::PointIndices> &cluster_indices,
                                            const pcl::PointCloud<pcl::PointXYZ>::Ptr &cloud);
 
+  /// Simple obstacle detection using height and distance thresholds
+  Eigen::MatrixX3f SimpleObstacleDetection(const Eigen::MatrixX3f &cloud);
+
  private:
   /// Data subscribers.
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_sub_;
@@ -75,6 +78,14 @@ class GroundSegmentationServer : public rclcpp::Node {
   bool enable_persistent_tracking_;
   int min_frames_for_obstacle_;
   double max_cluster_distance_;
+
+  /// Simple obstacle detection parameters
+  bool use_simple_obstacle_detection_;
+  double simple_obstacle_min_height_;
+  double simple_obstacle_max_height_;
+  double simple_obstacle_max_distance_;
+  double sensor_height_{1.45};  // Initialize with default value
+  bool debug_logging_{false};   // Enable detailed debug logging
 
   /// TF2 for coordinate transformation
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
