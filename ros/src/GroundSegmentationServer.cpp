@@ -455,7 +455,8 @@ Eigen::MatrixX3f GroundSegmentationServer::TrackPersistentClusters(
 
   // Efficient matching using squared distances to avoid sqrt
   const float max_distance_sq = max_cluster_distance_ * max_cluster_distance_;
-  std::vector<bool> matched(persistent_clusters_.size(), false);
+  const size_t original_persistent_count = persistent_clusters_.size();
+  std::vector<bool> matched(original_persistent_count, false);
 
   if (debug_logging_) {
     RCLCPP_INFO(this->get_logger(), "Starting cluster matching: %zu current clusters, %zu persistent clusters",
@@ -474,17 +475,8 @@ Eigen::MatrixX3f GroundSegmentationServer::TrackPersistentClusters(
     float min_distance_sq = max_distance_sq;
 
     // Find closest persistent cluster
-    for (size_t j = 0; j < persistent_clusters_.size(); ++j) {
-      if (j >= matched.size()) {
-        RCLCPP_ERROR(this->get_logger(), "Index %zu out of bounds for matched vector (size: %zu)", j, matched.size());
-        break;
-      }
+    for (size_t j = 0; j < original_persistent_count; ++j) {
       if (matched[j]) continue;
-
-      if (j >= persistent_clusters_.size()) {
-        RCLCPP_ERROR(this->get_logger(), "Index %zu out of bounds for persistent_clusters (size: %zu)", j, persistent_clusters_.size());
-        break;
-      }
 
       if (debug_logging_) {
         RCLCPP_INFO(this->get_logger(), "Checking match with persistent cluster %zu, center [%.2f, %.2f, %.2f]",
