@@ -698,23 +698,50 @@ GroundSegmentationServer::ClusterDetail GroundSegmentationServer::ExtractCluster
     const pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud,
     uint32_t cluster_id, uint8_t confidence_level) {
 
-  // Calculate cluster centroid
+  // Initialize bounding box extremes
+  Eigen::Vector3f min_point(std::numeric_limits<float>::max(),
+                           std::numeric_limits<float>::max(),
+                           std::numeric_limits<float>::max());
+  Eigen::Vector3f max_point(std::numeric_limits<float>::lowest(),
+                           std::numeric_limits<float>::lowest(),
+                           std::numeric_limits<float>::lowest());
+
+  // Calculate cluster centroid and bounding box
   Eigen::Vector3f centroid(0.0f, 0.0f, 0.0f);
   size_t valid_points = 0;
 
   for (int idx : cluster_indices) {
     if (idx >= 0 && static_cast<size_t>(idx) < cloud->points.size()) {
       const auto& point = cloud->points[idx];
+
+      // Accumulate for centroid
       centroid.x() += point.x;
       centroid.y() += point.y;
       centroid.z() += point.z;
+
+      // Update bounding box extremes
+      min_point.x() = std::min(min_point.x(), point.x);
+      min_point.y() = std::min(min_point.y(), point.y);
+      min_point.z() = std::min(min_point.z(), point.z);
+
+      max_point.x() = std::max(max_point.x(), point.x);
+      max_point.y() = std::max(max_point.y(), point.y);
+      max_point.z() = std::max(max_point.z(), point.z);
+
       valid_points++;
     }
   }
 
   if (valid_points > 0) {
     centroid /= static_cast<float>(valid_points);
+  } else {
+    // Handle case with no valid points
+    min_point = Eigen::Vector3f::Zero();
+    max_point = Eigen::Vector3f::Zero();
   }
+
+  // Calculate bounding box dimensions
+  Eigen::Vector3f dimensions = max_point - min_point;
 
   // Convert to polar coordinates
   float range = std::sqrt(centroid.x() * centroid.x() + centroid.y() * centroid.y());
@@ -728,6 +755,9 @@ GroundSegmentationServer::ClusterDetail GroundSegmentationServer::ExtractCluster
   detail.centroid_polar = Eigen::Vector3f(range, bearing, elevation);
   detail.point_count = valid_points;
   detail.confidence_level = confidence_level;
+  detail.bounding_box_min = min_point;
+  detail.bounding_box_max = max_point;
+  detail.bounding_box_dimensions = dimensions;
 
   return detail;
 }
@@ -770,6 +800,25 @@ void GroundSegmentationServer::PublishClouds(const Eigen::MatrixX3f &est_ground,
 
     obstacle_state.point_counts.push_back(cluster.point_count);
     obstacle_state.confidence_levels.push_back(cluster.confidence_level);
+
+    // Add bounding box information
+    geometry_msgs::msg::Point bbox_min;
+    bbox_min.x = cluster.bounding_box_min.x();
+    bbox_min.y = cluster.bounding_box_min.y();
+    bbox_min.z = cluster.bounding_box_min.z();
+    obstacle_state.bounding_box_min.push_back(bbox_min);
+
+    geometry_msgs::msg::Point bbox_max;
+    bbox_max.x = cluster.bounding_box_max.x();
+    bbox_max.y = cluster.bounding_box_max.y();
+    bbox_max.z = cluster.bounding_box_max.z();
+    obstacle_state.bounding_box_max.push_back(bbox_max);
+
+    geometry_msgs::msg::Vector3 bbox_dims;
+    bbox_dims.x = cluster.bounding_box_dimensions.x();  // depth (forward-backward dimension, along X-axis)
+    bbox_dims.y = cluster.bounding_box_dimensions.y();  // width (left-right dimension, along Y-axis)
+    bbox_dims.z = cluster.bounding_box_dimensions.z();  // height (up-down dimension, along Z-axis)
+    obstacle_state.bounding_box_dimensions.push_back(bbox_dims);
   }
 
   obstacle_state_publisher_->publish(obstacle_state);

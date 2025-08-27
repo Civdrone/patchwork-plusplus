@@ -58,6 +58,9 @@ class GroundSegmentationServer : public rclcpp::Node {
     Eigen::Vector3f centroid_polar;  // range, bearing, elevation
     uint32_t point_count;
     uint8_t confidence_level;
+    Eigen::Vector3f bounding_box_min;   // Min corner of axis-aligned bounding box
+    Eigen::Vector3f bounding_box_max;   // Max corner of axis-aligned bounding box
+    Eigen::Vector3f bounding_box_dimensions; // Width (x), depth (y), height (z)
   };
 
   /// Store current frame cluster details for publishing
