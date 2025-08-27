@@ -113,6 +113,9 @@ GroundSegmentationServer::GroundSegmentationServer(const rclcpp::NodeOptions &op
 
 void GroundSegmentationServer::EstimateGround(
     const sensor_msgs::msg::PointCloud2::ConstSharedPtr &msg) {
+  // Clear previous frame's cluster details at start of processing
+  current_cluster_details_.clear();
+
   const auto &cloud_raw = patchworkpp_ros::utils::PointCloud2ToEigenMat(msg);
 
   // Apply transformation and FOV filtering
@@ -329,9 +332,20 @@ Eigen::MatrixX3f GroundSegmentationServer::FilterObstaclesByClusterSize(const Ei
     }
   }
 
-  // Build filtered obstacle cloud from valid clusters (fast path)
+  // Build filtered obstacle cloud from valid clusters (fast path) and extract cluster details
   std::vector<int> valid_indices;
+
+  uint32_t cluster_id = 0;
   for (const auto& cluster : cluster_indices) {
+    if (cluster.indices.size() < static_cast<size_t>(min_cluster_size_)) {
+      continue;
+    }
+
+    // Extract cluster details using helper method
+    ClusterDetail detail = ExtractClusterDetail(cluster.indices, cloud, cluster_id++, 100); // 100% confidence for non-persistent mode
+    current_cluster_details_.push_back(detail);
+
+    // Add cluster points to valid indices
     valid_indices.insert(valid_indices.end(), cluster.indices.begin(), cluster.indices.end());
   }
 
@@ -556,14 +570,23 @@ Eigen::MatrixX3f GroundSegmentationServer::TrackPersistentClusters(
     }
   }
 
-  // Build result from valid persistent clusters
+  // Build result from valid persistent clusters and extract cluster details
   std::vector<int> valid_cluster_indices;
+  uint32_t cluster_id = 0;
+
   for (const auto& current : current_clusters) {
     // Check if this cluster matches a valid persistent cluster
     for (const auto& persistent : persistent_clusters_) {
       if (persistent.frame_count >= min_frames_for_obstacle_) {
         const float distance_sq = (current.first - persistent.center).squaredNorm();
         if (distance_sq < max_distance_sq) {
+          // Extract cluster details using helper method
+          // Normalize confidence as percentage: min_frames_for_obstacle_ = 100%, higher frame counts can exceed 100%
+          float confidence_ratio = static_cast<float>(persistent.frame_count) / static_cast<float>(min_frames_for_obstacle_);
+          uint8_t confidence_level = std::min(255, static_cast<int>(confidence_ratio * 100.0f)); // Cap at uint8 max, not 100%
+          ClusterDetail detail = ExtractClusterDetail(current.second, cloud, cluster_id++, confidence_level);
+          current_cluster_details_.push_back(detail);
+
           valid_cluster_indices.insert(valid_cluster_indices.end(),
                                      current.second.begin(),
                                      current.second.end());
@@ -670,6 +693,45 @@ Eigen::MatrixX3f GroundSegmentationServer::SimpleObstacleDetection(const Eigen::
   return obstacles;
 }
 
+GroundSegmentationServer::ClusterDetail GroundSegmentationServer::ExtractClusterDetail(
+    const std::vector<int>& cluster_indices,
+    const pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud,
+    uint32_t cluster_id, uint8_t confidence_level) {
+
+  // Calculate cluster centroid
+  Eigen::Vector3f centroid(0.0f, 0.0f, 0.0f);
+  size_t valid_points = 0;
+
+  for (int idx : cluster_indices) {
+    if (idx >= 0 && static_cast<size_t>(idx) < cloud->points.size()) {
+      const auto& point = cloud->points[idx];
+      centroid.x() += point.x;
+      centroid.y() += point.y;
+      centroid.z() += point.z;
+      valid_points++;
+    }
+  }
+
+  if (valid_points > 0) {
+    centroid /= static_cast<float>(valid_points);
+  }
+
+  // Convert to polar coordinates
+  float range = std::sqrt(centroid.x() * centroid.x() + centroid.y() * centroid.y());
+  float bearing = std::atan2(centroid.y(), centroid.x());
+  float elevation = std::atan2(centroid.z(), range);
+
+  // Create and return cluster detail
+  ClusterDetail detail;
+  detail.id = cluster_id;
+  detail.centroid_cartesian = centroid;
+  detail.centroid_polar = Eigen::Vector3f(range, bearing, elevation);
+  detail.point_count = valid_points;
+  detail.confidence_level = confidence_level;
+
+  return detail;
+}
+
 void GroundSegmentationServer::PublishClouds(const Eigen::MatrixX3f &est_ground,
                                              const Eigen::MatrixX3f &est_nonground,
                                              const Eigen::MatrixX3f &est_obstacles,
@@ -683,8 +745,33 @@ void GroundSegmentationServer::PublishClouds(const Eigen::MatrixX3f &est_ground,
   obstacles_publisher_->publish(
       std::move(patchworkpp_ros::utils::EigenMatToPointCloud2(est_obstacles, header)));
 
+  // Create enhanced obstacle state message with cluster details
   civ_interfaces::msg::ObstacleState obstacle_state;
+  obstacle_state.header = header;
   obstacle_state.state = (est_obstacles.rows() > 0) ? civ_interfaces::msg::ObstacleState::OBSTACLE : civ_interfaces::msg::ObstacleState::FREE;
+
+  // Populate cluster details
+  obstacle_state.cluster_count = current_cluster_details_.size();
+
+  for (const auto& cluster : current_cluster_details_) {
+    obstacle_state.cluster_ids.push_back(cluster.id);
+
+    geometry_msgs::msg::Point cart_point;
+    cart_point.x = cluster.centroid_cartesian.x();
+    cart_point.y = cluster.centroid_cartesian.y();
+    cart_point.z = cluster.centroid_cartesian.z();
+    obstacle_state.centroids_cartesian.push_back(cart_point);
+
+    geometry_msgs::msg::Point polar_point;
+    polar_point.x = cluster.centroid_polar.x(); // range
+    polar_point.y = cluster.centroid_polar.y(); // bearing
+    polar_point.z = cluster.centroid_polar.z(); // elevation
+    obstacle_state.centroids_polar.push_back(polar_point);
+
+    obstacle_state.point_counts.push_back(cluster.point_count);
+    obstacle_state.confidence_levels.push_back(cluster.confidence_level);
+  }
+
   obstacle_state_publisher_->publish(obstacle_state);
 }
 }  // namespace patchworkpp_ros

@@ -51,6 +51,23 @@ class GroundSegmentationServer : public rclcpp::Node {
   /// Simple obstacle detection using height and distance thresholds
   Eigen::MatrixX3f SimpleObstacleDetection(const Eigen::MatrixX3f &cloud);
 
+  /// Extract cluster information for publishing
+  struct ClusterDetail {
+    uint32_t id;
+    Eigen::Vector3f centroid_cartesian;
+    Eigen::Vector3f centroid_polar;  // range, bearing, elevation
+    uint32_t point_count;
+    uint8_t confidence_level;
+  };
+
+  /// Store current frame cluster details for publishing
+  std::vector<ClusterDetail> current_cluster_details_;
+
+  /// Extract cluster details for a given cluster
+  ClusterDetail ExtractClusterDetail(const std::vector<int>& cluster_indices,
+                                     const pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud,
+                                     uint32_t cluster_id, uint8_t confidence_level);
+
  private:
   /// Data subscribers.
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_sub_;
