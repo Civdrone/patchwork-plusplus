@@ -71,6 +71,10 @@ GroundSegmentationServer::GroundSegmentationServer(const rclcpp::NodeOptions &op
   simple_obstacle_max_distance_ = declare_parameter<double>("simple_obstacle_max_distance", 5.0);
   debug_logging_ = declare_parameter<bool>("debug_logging", false);
 
+  // Floating obstacle filtering parameters
+  filter_floating_obstacles_ = declare_parameter<bool>("filter_floating_obstacles", true);
+  max_ground_clearance_ = declare_parameter<double>("max_ground_clearance", 0.5);
+
   // Initialize TF2
   tf_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
   tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
@@ -762,6 +766,28 @@ GroundSegmentationServer::ClusterDetail GroundSegmentationServer::ExtractCluster
   return detail;
 }
 
+bool GroundSegmentationServer::IsObstacleGrounded(const ClusterDetail& cluster_detail, double ground_level) const {
+  if (!filter_floating_obstacles_) {
+    return true; // Don't filter if disabled
+  }
+
+  // Check if the lowest point of the bounding box is within ground clearance threshold
+  double lowest_point = static_cast<double>(cluster_detail.bounding_box_min.z());
+  double distance_from_ground = lowest_point - ground_level;
+
+  // Obstacle is considered grounded if its lowest point is close to or below ground level
+  bool is_grounded = distance_from_ground <= max_ground_clearance_;
+
+  if (debug_logging_) {
+    RCLCPP_DEBUG(this->get_logger(),
+                 "Cluster %u: lowest_point=%.3f, ground_level=%.3f, distance_from_ground=%.3f, is_grounded=%s",
+                 cluster_detail.id, lowest_point, ground_level, distance_from_ground,
+                 is_grounded ? "true" : "false");
+  }
+
+  return is_grounded;
+}
+
 void GroundSegmentationServer::PublishClouds(const Eigen::MatrixX3f &est_ground,
                                              const Eigen::MatrixX3f &est_nonground,
                                              const Eigen::MatrixX3f &est_obstacles,
@@ -778,12 +804,42 @@ void GroundSegmentationServer::PublishClouds(const Eigen::MatrixX3f &est_ground,
   // Create enhanced obstacle state message with cluster details
   civ_interfaces::msg::ObstacleState obstacle_state;
   obstacle_state.header = header;
+  // Note: We'll update the state after filtering, so temporarily set it here
   obstacle_state.state = (est_obstacles.rows() > 0) ? civ_interfaces::msg::ObstacleState::OBSTACLE : civ_interfaces::msg::ObstacleState::FREE;
 
-  // Populate cluster details
-  obstacle_state.cluster_count = current_cluster_details_.size();
+  // Calculate ground level for floating obstacle filtering
+  double ground_level;
+  if (use_simple_obstacle_detection_) {
+    ground_level = -sensor_height_;
+  } else {
+    // For Patchwork++ mode, estimate ground level from ground points
+    ground_level = -sensor_height_; // Fallback to sensor height
+    if (est_ground.rows() > 0) {
+      // Use median Z value of ground points as ground level
+      std::vector<float> ground_z_values;
+      ground_z_values.reserve(est_ground.rows());
+      for (int i = 0; i < est_ground.rows(); ++i) {
+        ground_z_values.push_back(est_ground(i, 2));
+      }
+      std::sort(ground_z_values.begin(), ground_z_values.end());
+      ground_level = static_cast<double>(ground_z_values[ground_z_values.size() / 2]);
+    }
+  }
 
+  // Filter out floating obstacles before publishing
+  std::vector<ClusterDetail> grounded_clusters;
   for (const auto& cluster : current_cluster_details_) {
+    if (IsObstacleGrounded(cluster, ground_level)) {
+      grounded_clusters.push_back(cluster);
+    } else if (debug_logging_) {
+      RCLCPP_INFO(this->get_logger(), "Filtered out floating obstacle cluster %u", cluster.id);
+    }
+  }
+
+  // Populate cluster details with grounded obstacles only
+  obstacle_state.cluster_count = grounded_clusters.size();
+
+  for (const auto& cluster : grounded_clusters) {
     obstacle_state.cluster_ids.push_back(cluster.id);
 
     geometry_msgs::msg::Point cart_point;
@@ -820,6 +876,9 @@ void GroundSegmentationServer::PublishClouds(const Eigen::MatrixX3f &est_ground,
     bbox_dims.z = cluster.bounding_box_dimensions.z();  // height (up-down dimension, along Z-axis)
     obstacle_state.bounding_box_dimensions.push_back(bbox_dims);
   }
+
+  // Update obstacle state based on filtered (grounded) clusters
+  obstacle_state.state = (grounded_clusters.size() > 0) ? civ_interfaces::msg::ObstacleState::OBSTACLE : civ_interfaces::msg::ObstacleState::FREE;
 
   obstacle_state_publisher_->publish(obstacle_state);
 }

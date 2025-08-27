@@ -96,6 +96,9 @@ def generate_launch_description():
         "simple_obstacle_max_height": 3.0,  # maximum height above ground for simple obstacle detection (meters)
         "simple_obstacle_max_distance": 5.0,  # maximum distance for simple obstacle detection (meters)
         "debug_logging": False,  # enable detailed debug logging for troubleshooting
+        # Floating obstacle filtering parameters
+        "filter_floating_obstacles": True,  # enable floating obstacle filtering
+        "max_ground_clearance": 0.5,  # max distance from ground to be considered grounded (meters)
         "fov_angle_deg": 120.0,  # Field of view angle in degrees (±60° from positive x-axis)
         "num_sectors_each_zone": [12, 24, 36, 24],  # Setting of Concentric Zone Model(CZM); Default: [16, 32, 54, 32]
                                                     # 32 beams is half of the 64-beam systems tuned in the original tests.

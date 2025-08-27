@@ -71,6 +71,9 @@ class GroundSegmentationServer : public rclcpp::Node {
                                      const pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud,
                                      uint32_t cluster_id, uint8_t confidence_level);
 
+  /// Check if an obstacle is grounded (not floating)
+  bool IsObstacleGrounded(const ClusterDetail& cluster_detail, double ground_level) const;
+
  private:
   /// Data subscribers.
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_sub_;
@@ -106,6 +109,10 @@ class GroundSegmentationServer : public rclcpp::Node {
   double simple_obstacle_max_distance_;
   double sensor_height_{1.45};  // Initialize with default value
   bool debug_logging_{false};   // Enable detailed debug logging
+
+  /// Floating obstacle filtering parameters
+  bool filter_floating_obstacles_{true};   // Enable floating obstacle filtering
+  double max_ground_clearance_{0.5};       // Max distance from ground to be considered grounded
 
   /// TF2 for coordinate transformation
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
