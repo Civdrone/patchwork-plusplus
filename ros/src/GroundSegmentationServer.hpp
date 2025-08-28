@@ -16,6 +16,7 @@
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <std_msgs/msg/header.hpp>
 #include <civ_interfaces/msg/obstacle_state.hpp>
+#include <visualization_msgs/msg/marker_array.hpp>
 
 namespace patchworkpp_ros {
 
@@ -74,6 +75,11 @@ class GroundSegmentationServer : public rclcpp::Node {
   /// Check if an obstacle is grounded (not floating)
   bool IsObstacleGrounded(const ClusterDetail& cluster_detail, double ground_level) const;
 
+  /// Create bounding box markers for Foxglove visualization
+  visualization_msgs::msg::MarkerArray CreateBoundingBoxMarkers(
+      const std::vector<ClusterDetail>& clusters,
+      const std_msgs::msg::Header& header) const;
+
  private:
   /// Data subscribers.
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_sub_;
@@ -84,6 +90,7 @@ class GroundSegmentationServer : public rclcpp::Node {
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr nonground_publisher_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr obstacles_publisher_;
   rclcpp::Publisher<civ_interfaces::msg::ObstacleState>::SharedPtr obstacle_state_publisher_;
+  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr bounding_box_publisher_;
 
   /// Patchwork++
   std::unique_ptr<patchwork::PatchWorkpp> Patchworkpp_;

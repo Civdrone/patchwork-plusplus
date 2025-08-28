@@ -30,6 +30,7 @@ find_package(sensor_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_eigen REQUIRED)
 find_package(tf2_sensor_msgs REQUIRED)
+find_package(visualization_msgs REQUIRED)
 find_package(civ_interfaces REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(PCL_PKGCONF REQUIRED pcl_common pcl_search pcl_segmentation pcl_kdtree)
@@ -53,7 +54,8 @@ ament_target_dependencies(
   sensor_msgs
   geometry_msgs
   tf2_ros
-  tf2_eigen)
+  tf2_eigen
+  visualization_msgs)
 
 rclcpp_components_register_node(gseg_component PLUGIN "patchworkpp_ros::GroundSegmentationServer" EXECUTABLE patchworkpp_node)
 

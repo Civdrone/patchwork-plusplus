@@ -15,6 +15,7 @@
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/qos.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <rclcpp/duration.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <civ_interfaces/msg/obstacle_state.hpp>
@@ -111,6 +112,8 @@ GroundSegmentationServer::GroundSegmentationServer(const rclcpp::NodeOptions &op
       create_publisher<sensor_msgs::msg::PointCloud2>("/patchworkpp/obstacles", qos);
   obstacle_state_publisher_ =
       create_publisher<civ_interfaces::msg::ObstacleState>("/civ/obstacle/state", qos);
+  bounding_box_publisher_ =
+      create_publisher<visualization_msgs::msg::MarkerArray>("/civ/obstacle/bounding_boxes", qos);
 
   RCLCPP_INFO(this->get_logger(), "Patchwork++ ROS 2 node initialized");
 }
@@ -788,6 +791,93 @@ bool GroundSegmentationServer::IsObstacleGrounded(const ClusterDetail& cluster_d
   return is_grounded;
 }
 
+visualization_msgs::msg::MarkerArray GroundSegmentationServer::CreateBoundingBoxMarkers(
+    const std::vector<ClusterDetail>& clusters,
+    const std_msgs::msg::Header& header) const {
+
+  visualization_msgs::msg::MarkerArray marker_array;
+
+  // Clear all existing markers first
+  visualization_msgs::msg::Marker clear_marker;
+  clear_marker.header = header;
+  clear_marker.ns = "obstacle_bounding_boxes";
+  clear_marker.action = visualization_msgs::msg::Marker::DELETEALL;
+  marker_array.markers.push_back(clear_marker);
+
+  // Create a marker for each cluster's bounding box
+  for (size_t i = 0; i < clusters.size(); ++i) {
+    const auto& cluster = clusters[i];
+
+    visualization_msgs::msg::Marker marker;
+    marker.header = header;
+    marker.ns = "obstacle_bounding_boxes";
+    marker.id = static_cast<int>(cluster.id);
+    marker.type = visualization_msgs::msg::Marker::CUBE;
+    marker.action = visualization_msgs::msg::Marker::ADD;
+
+    // Position at centroid
+    marker.pose.position.x = cluster.centroid_cartesian.x();
+    marker.pose.position.y = cluster.centroid_cartesian.y();
+    marker.pose.position.z = cluster.centroid_cartesian.z();
+
+    // No rotation (axis-aligned boxes)
+    marker.pose.orientation.x = 0.0;
+    marker.pose.orientation.y = 0.0;
+    marker.pose.orientation.z = 0.0;
+    marker.pose.orientation.w = 1.0;
+
+    // Set dimensions
+    marker.scale.x = cluster.bounding_box_dimensions.x(); // depth
+    marker.scale.y = cluster.bounding_box_dimensions.y(); // width
+    marker.scale.z = cluster.bounding_box_dimensions.z(); // height
+
+    // Color based on confidence level
+    float confidence_ratio = static_cast<float>(cluster.confidence_level) / 255.0f;
+
+    // Color scheme: Low confidence = Red, High confidence = Green
+    marker.color.r = 1.0f - confidence_ratio; // Red decreases with confidence
+    marker.color.g = confidence_ratio;         // Green increases with confidence
+    marker.color.b = 0.2f;                     // Small blue component
+    marker.color.a = 0.6f;                     // Semi-transparent
+
+    // Lifetime - markers persist until explicitly deleted
+    marker.lifetime = rclcpp::Duration::from_seconds(0.5); // 0.5 second lifetime
+
+    marker_array.markers.push_back(marker);
+
+    // Add text label showing cluster ID and confidence
+    visualization_msgs::msg::Marker text_marker;
+    text_marker.header = header;
+    text_marker.ns = "obstacle_labels";
+    text_marker.id = static_cast<int>(cluster.id);
+    text_marker.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
+    text_marker.action = visualization_msgs::msg::Marker::ADD;
+
+    // Position slightly above the bounding box
+    text_marker.pose.position.x = cluster.centroid_cartesian.x();
+    text_marker.pose.position.y = cluster.centroid_cartesian.y();
+    text_marker.pose.position.z = cluster.centroid_cartesian.z() + cluster.bounding_box_dimensions.z() / 2.0f + 0.2f;
+
+    text_marker.pose.orientation.w = 1.0;
+
+    // Text content
+    text_marker.text = "ID:" + std::to_string(cluster.id) + " C:" + std::to_string(cluster.confidence_level) + "%";
+
+    // Text appearance
+    text_marker.scale.z = 0.3; // Text height
+    text_marker.color.r = 1.0;
+    text_marker.color.g = 1.0;
+    text_marker.color.b = 1.0;
+    text_marker.color.a = 0.9;
+
+    text_marker.lifetime = rclcpp::Duration::from_seconds(0.5);
+
+    marker_array.markers.push_back(text_marker);
+  }
+
+  return marker_array;
+}
+
 void GroundSegmentationServer::PublishClouds(const Eigen::MatrixX3f &est_ground,
                                              const Eigen::MatrixX3f &est_nonground,
                                              const Eigen::MatrixX3f &est_obstacles,
@@ -881,6 +971,10 @@ void GroundSegmentationServer::PublishClouds(const Eigen::MatrixX3f &est_ground,
   obstacle_state.state = (grounded_clusters.size() > 0) ? civ_interfaces::msg::ObstacleState::OBSTACLE : civ_interfaces::msg::ObstacleState::FREE;
 
   obstacle_state_publisher_->publish(obstacle_state);
+
+  // Publish bounding box markers for Foxglove visualization
+  auto bounding_box_markers = CreateBoundingBoxMarkers(grounded_clusters, header);
+  bounding_box_publisher_->publish(bounding_box_markers);
 }
 }  // namespace patchworkpp_ros
 
