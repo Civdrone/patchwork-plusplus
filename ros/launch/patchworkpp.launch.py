@@ -101,6 +101,7 @@ def generate_launch_description():
         "max_ground_clearance": 0.5,  # max distance from ground to be considered grounded (meters)
         # Performance profiling parameters
         "enable_profiling": True,  # enable detailed timing profiling for performance analysis
+        "enable_memory_profiling": True,  # enable memory usage tracking and analysis
         "profiling_window_size": 50,  # number of frames to average for profiling statistics
         "profiling_output_interval": 10.0,  # seconds between profiling output (0 = disable periodic output)
         "fov_angle_deg": 120.0,  # Field of view angle in degrees (±60° from positive x-axis)

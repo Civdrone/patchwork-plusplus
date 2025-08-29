@@ -128,6 +128,7 @@ class GroundSegmentationServer : public rclcpp::Node {
 
   /// Performance profiling parameters
   bool enable_profiling_{false};           // Enable detailed timing profiling
+  bool enable_memory_profiling_{false};    // Enable memory usage tracking
   int profiling_window_size_{50};          // Number of frames for statistics
   double profiling_output_interval_{10.0}; // Seconds between profiling output
 
@@ -158,6 +159,13 @@ class GroundSegmentationServer : public rclcpp::Node {
   std::vector<ClusterInfo> persistent_clusters_;
 
   /// Performance profiling infrastructure
+  struct MemoryInfo {
+    size_t rss_mb;      // Resident Set Size in MB
+    size_t vms_mb;      // Virtual Memory Size in MB
+    size_t frame_start_rss_mb; // RSS at frame start
+    size_t frame_peak_rss_mb;  // Peak RSS during this frame
+  };
+
   struct ProfilingData {
     std::deque<double> transform_times;
     std::deque<double> fov_filter_times;
@@ -167,6 +175,11 @@ class GroundSegmentationServer : public rclcpp::Node {
     std::deque<double> floating_filter_times;
     std::deque<double> publishing_times;
     std::deque<double> total_frame_times;
+
+    // Memory profiling data
+    std::deque<MemoryInfo> memory_snapshots;
+    size_t baseline_rss_mb;      // Memory usage at startup
+    size_t absolute_peak_rss_mb; // Absolute peak RSS ever observed
 
     std::chrono::high_resolution_clock::time_point last_output_time;
 
@@ -187,6 +200,38 @@ class GroundSegmentationServer : public rclcpp::Node {
     double GetMax(const std::deque<double>& times) const {
       if (times.empty()) return 0.0;
       return *std::max_element(times.begin(), times.end());
+    }
+
+    void AddMemorySnapshot(const MemoryInfo& memory_info, int window_size) {
+      memory_snapshots.push_back(memory_info);
+      if (static_cast<int>(memory_snapshots.size()) > window_size) {
+        memory_snapshots.pop_front();
+      }
+
+      // Track absolute peak across all frames
+      absolute_peak_rss_mb = std::max(absolute_peak_rss_mb, memory_info.rss_mb);
+    }
+
+    double GetAverageMemoryUsage() const {
+      if (memory_snapshots.empty()) return 0.0;
+      double sum = 0.0;
+      for (const auto& mem : memory_snapshots) {
+        sum += static_cast<double>(mem.rss_mb);
+      }
+      return sum / static_cast<double>(memory_snapshots.size());
+    }
+
+    size_t GetPeakMemoryUsage() const {
+      if (memory_snapshots.empty()) return 0;
+      size_t peak = 0;
+      for (const auto& mem : memory_snapshots) {
+        peak = std::max(peak, mem.rss_mb);
+      }
+      return peak;
+    }
+
+    size_t GetAbsolutePeakMemoryUsage() const {
+      return absolute_peak_rss_mb;
     }
   };
 
@@ -222,6 +267,9 @@ class GroundSegmentationServer : public rclcpp::Node {
 
   /// Print profiling statistics
   void OutputProfilingStatistics();
+
+  /// Get current memory usage information
+  MemoryInfo GetCurrentMemoryUsage() const;
 };
 
 }  // namespace patchworkpp_ros

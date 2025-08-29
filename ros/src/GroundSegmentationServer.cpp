@@ -2,6 +2,8 @@
 #include <utility>
 #include <vector>
 #include <limits>
+#include <fstream>
+#include <sstream>
 
 #include <Eigen/Core>
 
@@ -79,13 +81,24 @@ GroundSegmentationServer::GroundSegmentationServer(const rclcpp::NodeOptions &op
 
   // Performance profiling parameters
   enable_profiling_ = declare_parameter<bool>("enable_profiling", false);
+  enable_memory_profiling_ = declare_parameter<bool>("enable_memory_profiling", false);
   profiling_window_size_ = declare_parameter<int>("profiling_window_size", 50);
   profiling_output_interval_ = declare_parameter<double>("profiling_output_interval", 10.0);
 
   // Initialize profiling
-  if (enable_profiling_) {
+  if (enable_profiling_ || enable_memory_profiling_) {
     profiling_data_.last_output_time = std::chrono::high_resolution_clock::now();
-    RCLCPP_INFO(this->get_logger(), "Performance profiling enabled - window size: %d frames, output interval: %.1f seconds",
+
+    if (enable_memory_profiling_) {
+      auto baseline_memory = GetCurrentMemoryUsage();
+      profiling_data_.baseline_rss_mb = baseline_memory.rss_mb;
+      profiling_data_.absolute_peak_rss_mb = baseline_memory.rss_mb;
+      RCLCPP_INFO(this->get_logger(), "Memory profiling enabled - baseline RSS: %zu MB", baseline_memory.rss_mb);
+    }
+
+    RCLCPP_INFO(this->get_logger(), "Performance profiling enabled - timing: %s, memory: %s, window size: %d frames, output interval: %.1f seconds",
+                enable_profiling_ ? "ON" : "OFF",
+                enable_memory_profiling_ ? "ON" : "OFF",
                 profiling_window_size_, profiling_output_interval_);
   }
 
@@ -216,6 +229,12 @@ void GroundSegmentationServer::EstimateGround(
   {
     ScopedTimer publishing_timer(profiling_data_.publishing_times, profiling_window_size_, enable_profiling_);
     PublishClouds(ground, nonground, obstacles_filtered, msg->header);
+  }
+
+  // Collect memory usage snapshot
+  if (enable_memory_profiling_) {
+    auto current_memory = GetCurrentMemoryUsage();
+    profiling_data_.AddMemorySnapshot(current_memory, profiling_window_size_);
   }
 
   // Output profiling statistics periodically
@@ -1163,8 +1182,68 @@ void GroundSegmentationServer::OutputProfilingStatistics() {
       RCLCPP_WARN(this->get_logger(), "Processing speed below target! Consider optimization or parameter tuning.");
     }
 
+    // Memory usage statistics
+    if (enable_memory_profiling_ && !profiling_data_.memory_snapshots.empty()) {
+      RCLCPP_INFO(this->get_logger(), "Memory Usage (Avg/Window Peak/Absolute Peak MB):");
+      RCLCPP_INFO(this->get_logger(), "  Average RSS:        %6.1f MB",
+                  profiling_data_.GetAverageMemoryUsage());
+      RCLCPP_INFO(this->get_logger(), "  Window Peak RSS:    %6zu MB",
+                  profiling_data_.GetPeakMemoryUsage());
+      RCLCPP_INFO(this->get_logger(), "  Absolute Peak RSS:  %6zu MB",
+                  profiling_data_.GetAbsolutePeakMemoryUsage());
+      RCLCPP_INFO(this->get_logger(), "  Baseline RSS:       %6zu MB",
+                  profiling_data_.baseline_rss_mb);
+      RCLCPP_INFO(this->get_logger(), "  Memory Growth:      %6.1f MB",
+                  profiling_data_.GetAverageMemoryUsage() - static_cast<double>(profiling_data_.baseline_rss_mb));
+    }
+
     RCLCPP_INFO(this->get_logger(), "=======================================\n");
   }
+}
+
+GroundSegmentationServer::MemoryInfo GroundSegmentationServer::GetCurrentMemoryUsage() const {
+  MemoryInfo info{};
+
+  std::ifstream status("/proc/self/status");
+  std::string line;
+
+  while (std::getline(status, line)) {
+    if (line.substr(0, 6) == "VmRSS:") {
+      // Extract RSS in KB and convert to MB
+      std::string value = line.substr(7);
+      size_t pos = value.find_first_not_of(" \t");
+      if (pos != std::string::npos) {
+        value = value.substr(pos);
+        size_t end_pos = value.find_first_of(" \t");
+        if (end_pos != std::string::npos) {
+          value = value.substr(0, end_pos);
+        }
+        try {
+          info.rss_mb = std::stoull(value) / 1024;  // Convert KB to MB
+        } catch (const std::exception&) {
+          info.rss_mb = 0;
+        }
+      }
+    } else if (line.substr(0, 7) == "VmSize:") {
+      // Extract VMS in KB and convert to MB
+      std::string value = line.substr(8);
+      size_t pos = value.find_first_not_of(" \t");
+      if (pos != std::string::npos) {
+        value = value.substr(pos);
+        size_t end_pos = value.find_first_of(" \t");
+        if (end_pos != std::string::npos) {
+          value = value.substr(0, end_pos);
+        }
+        try {
+          info.vms_mb = std::stoull(value) / 1024;  // Convert KB to MB
+        } catch (const std::exception&) {
+          info.vms_mb = 0;
+        }
+      }
+    }
+  }
+
+  return info;
 }
 }  // namespace patchworkpp_ros
 
