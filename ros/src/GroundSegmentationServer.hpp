@@ -17,6 +17,8 @@
 #include <std_msgs/msg/header.hpp>
 #include <civ_interfaces/msg/obstacle_state.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
+#include <chrono>
+#include <deque>
 
 namespace patchworkpp_ros {
 
@@ -124,6 +126,11 @@ class GroundSegmentationServer : public rclcpp::Node {
   bool filter_floating_obstacles_{true};   // Enable floating obstacle filtering
   double max_ground_clearance_{0.5};       // Max distance from ground to be considered grounded
 
+  /// Performance profiling parameters
+  bool enable_profiling_{false};           // Enable detailed timing profiling
+  int profiling_window_size_{50};          // Number of frames for statistics
+  double profiling_output_interval_{10.0}; // Seconds between profiling output
+
   /// TF2 for coordinate transformation
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
@@ -149,6 +156,72 @@ class GroundSegmentationServer : public rclcpp::Node {
   uint32_t next_cluster_id_{1};  // Global ID counter for new clusters
 
   std::vector<ClusterInfo> persistent_clusters_;
+
+  /// Performance profiling infrastructure
+  struct ProfilingData {
+    std::deque<double> transform_times;
+    std::deque<double> fov_filter_times;
+    std::deque<double> ground_segmentation_times;
+    std::deque<double> clustering_times;
+    std::deque<double> persistent_tracking_times;
+    std::deque<double> floating_filter_times;
+    std::deque<double> publishing_times;
+    std::deque<double> total_frame_times;
+
+    std::chrono::high_resolution_clock::time_point last_output_time;
+
+    void AddTiming(std::deque<double>& times, double duration, int window_size) {
+      times.push_back(duration);
+      if (static_cast<int>(times.size()) > window_size) {
+        times.pop_front();
+      }
+    }
+
+    double GetAverage(const std::deque<double>& times) const {
+      if (times.empty()) return 0.0;
+      double sum = 0.0;
+      for (double time : times) sum += time;
+      return sum / static_cast<double>(times.size());
+    }
+
+    double GetMax(const std::deque<double>& times) const {
+      if (times.empty()) return 0.0;
+      return *std::max_element(times.begin(), times.end());
+    }
+  };
+
+  ProfilingData profiling_data_;
+
+  /// Helper class for automatic timing measurements
+  class ScopedTimer {
+  public:
+    ScopedTimer(std::deque<double>& times, int window_size, bool enabled)
+      : times_(times), window_size_(window_size), enabled_(enabled) {
+      if (enabled_) {
+        start_time_ = std::chrono::high_resolution_clock::now();
+      }
+    }
+
+    ~ScopedTimer() {
+      if (enabled_) {
+        auto end_time = std::chrono::high_resolution_clock::now();
+        double duration = std::chrono::duration<double, std::milli>(end_time - start_time_).count();
+        times_.push_back(duration);
+        if (static_cast<int>(times_.size()) > window_size_) {
+          times_.pop_front();
+        }
+      }
+    }
+
+  private:
+    std::deque<double>& times_;
+    int window_size_;
+    bool enabled_;
+    std::chrono::high_resolution_clock::time_point start_time_;
+  };
+
+  /// Print profiling statistics
+  void OutputProfilingStatistics();
 };
 
 }  // namespace patchworkpp_ros

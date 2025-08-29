@@ -99,6 +99,10 @@ def generate_launch_description():
         # Floating obstacle filtering parameters
         "filter_floating_obstacles": True,  # enable floating obstacle filtering
         "max_ground_clearance": 0.5,  # max distance from ground to be considered grounded (meters)
+        # Performance profiling parameters
+        "enable_profiling": True,  # enable detailed timing profiling for performance analysis
+        "profiling_window_size": 50,  # number of frames to average for profiling statistics
+        "profiling_output_interval": 10.0,  # seconds between profiling output (0 = disable periodic output)
         "fov_angle_deg": 120.0,  # Field of view angle in degrees (±60° from positive x-axis)
         "num_sectors_each_zone": [12, 24, 36, 24],  # Setting of Concentric Zone Model(CZM); Default: [16, 32, 54, 32]
                                                     # 32 beams is half of the 64-beam systems tuned in the original tests.

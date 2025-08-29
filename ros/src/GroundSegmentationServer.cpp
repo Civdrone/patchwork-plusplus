@@ -77,6 +77,18 @@ GroundSegmentationServer::GroundSegmentationServer(const rclcpp::NodeOptions &op
   filter_floating_obstacles_ = declare_parameter<bool>("filter_floating_obstacles", true);
   max_ground_clearance_ = declare_parameter<double>("max_ground_clearance", 0.5);
 
+  // Performance profiling parameters
+  enable_profiling_ = declare_parameter<bool>("enable_profiling", false);
+  profiling_window_size_ = declare_parameter<int>("profiling_window_size", 50);
+  profiling_output_interval_ = declare_parameter<double>("profiling_output_interval", 10.0);
+
+  // Initialize profiling
+  if (enable_profiling_) {
+    profiling_data_.last_output_time = std::chrono::high_resolution_clock::now();
+    RCLCPP_INFO(this->get_logger(), "Performance profiling enabled - window size: %d frames, output interval: %.1f seconds",
+                profiling_window_size_, profiling_output_interval_);
+  }
+
   // Initialize TF2
   tf_buffer_ = std::make_shared<tf2_ros::Buffer>(this->get_clock());
   tf_listener_ = std::make_shared<tf2_ros::TransformListener>(*tf_buffer_);
@@ -121,12 +133,15 @@ GroundSegmentationServer::GroundSegmentationServer(const rclcpp::NodeOptions &op
 
 void GroundSegmentationServer::EstimateGround(
     const sensor_msgs::msg::PointCloud2::ConstSharedPtr &msg) {
+  // Total frame timing
+  ScopedTimer total_timer(profiling_data_.total_frame_times, profiling_window_size_, enable_profiling_);
+
   // Clear previous frame's cluster details at start of processing
   current_cluster_details_.clear();
 
   const auto &cloud_raw = patchworkpp_ros::utils::PointCloud2ToEigenMat(msg);
 
-  // Apply transformation and FOV filtering
+  // Apply transformation and FOV filtering (timing done inside FilterPointCloudByFOV)
   const auto &cloud = FilterPointCloudByFOV(cloud_raw, msg->header);
 
   // Create header with correct frame_id for transformed points
@@ -138,64 +153,83 @@ void GroundSegmentationServer::EstimateGround(
   Eigen::MatrixX3f nonground;
   Eigen::MatrixX3f obstacles_raw;
 
-  if (use_simple_obstacle_detection_) {
-    // Simple obstacle detection mode: no ground segmentation, direct obstacle detection
-    try {
-      RCLCPP_DEBUG(this->get_logger(), "Running SimpleObstacleDetection on cloud with %d points", (int)cloud.rows());
-      obstacles_raw = SimpleObstacleDetection(cloud);
-      RCLCPP_DEBUG(this->get_logger(), "SimpleObstacleDetection completed, found %d obstacles", (int)obstacles_raw.rows());
-    } catch (const std::exception& e) {
-      RCLCPP_ERROR(this->get_logger(), "SimpleObstacleDetection failed: %s", e.what());
-      obstacles_raw = Eigen::MatrixX3f(0, 3);  // Return empty on error
-    } catch (...) {
-      RCLCPP_ERROR(this->get_logger(), "SimpleObstacleDetection failed with unknown exception");
-      obstacles_raw = Eigen::MatrixX3f(0, 3);  // Return empty on error
+  // Ground segmentation phase with timing
+  {
+    ScopedTimer ground_seg_timer(profiling_data_.ground_segmentation_times, profiling_window_size_, enable_profiling_);
+
+    if (use_simple_obstacle_detection_) {
+      // Simple obstacle detection mode: no ground segmentation, direct obstacle detection
+      try {
+        RCLCPP_DEBUG(this->get_logger(), "Running SimpleObstacleDetection on cloud with %d points", (int)cloud.rows());
+        obstacles_raw = SimpleObstacleDetection(cloud);
+        RCLCPP_DEBUG(this->get_logger(), "SimpleObstacleDetection completed, found %d obstacles", (int)obstacles_raw.rows());
+      } catch (const std::exception& e) {
+        RCLCPP_ERROR(this->get_logger(), "SimpleObstacleDetection failed: %s", e.what());
+        obstacles_raw = Eigen::MatrixX3f(0, 3);  // Return empty on error
+      } catch (...) {
+        RCLCPP_ERROR(this->get_logger(), "SimpleObstacleDetection failed with unknown exception");
+        obstacles_raw = Eigen::MatrixX3f(0, 3);  // Return empty on error
+      }
+      // For simple mode, we don't separate ground/nonground - all points are either obstacles or ignored
+      ground = Eigen::MatrixX3f(0, 3);      // Empty ground
+      nonground = Eigen::MatrixX3f(0, 3);   // Empty nonground
+    } else {
+      // Patchwork++ mode: full ground segmentation
+      Patchworkpp_->estimateGround(cloud);
+      ground = Patchworkpp_->getGround();
+      nonground = Patchworkpp_->getNonground();
+      obstacles_raw = Patchworkpp_->getObstacles();
     }
-    // For simple mode, we don't separate ground/nonground - all points are either obstacles or ignored
-    ground = Eigen::MatrixX3f(0, 3);      // Empty ground
-    nonground = Eigen::MatrixX3f(0, 3);   // Empty nonground
-  } else {
-    // Patchwork++ mode: full ground segmentation
-    Patchworkpp_->estimateGround(cloud);
-    ground = Patchworkpp_->getGround();
-    nonground = Patchworkpp_->getNonground();
-    obstacles_raw = Patchworkpp_->getObstacles();
   }
 
   // Apply clustering to filter small obstacle clusters (common to both modes)
   Eigen::MatrixX3f obstacles_filtered;
-  try {
-    if (debug_logging_) {
-      RCLCPP_INFO(this->get_logger(), "Running FilterObstaclesByClusterSize on %d obstacle points", (int)obstacles_raw.rows());
-    }
+  {
+    ScopedTimer clustering_timer(profiling_data_.clustering_times, profiling_window_size_, enable_profiling_);
 
-    if (obstacles_raw.rows() == 0) {
+    try {
       if (debug_logging_) {
-        RCLCPP_INFO(this->get_logger(), "No obstacles to cluster, returning empty");
+        RCLCPP_INFO(this->get_logger(), "Running FilterObstaclesByClusterSize on %d obstacle points", (int)obstacles_raw.rows());
       }
-      obstacles_filtered = Eigen::MatrixX3f(0, 3);
-    } else {
-      obstacles_filtered = FilterObstaclesByClusterSize(obstacles_raw);
-      if (debug_logging_) {
-        RCLCPP_INFO(this->get_logger(), "Clustering completed, result has %d points", (int)obstacles_filtered.rows());
+
+      if (obstacles_raw.rows() == 0) {
+        if (debug_logging_) {
+          RCLCPP_INFO(this->get_logger(), "No obstacles to cluster, returning empty");
+        }
+        obstacles_filtered = Eigen::MatrixX3f(0, 3);
+      } else {
+        obstacles_filtered = FilterObstaclesByClusterSize(obstacles_raw);
+        if (debug_logging_) {
+          RCLCPP_INFO(this->get_logger(), "Clustering completed, result has %d points", (int)obstacles_filtered.rows());
+        }
       }
+    } catch (const std::exception& e) {
+      RCLCPP_ERROR(this->get_logger(), "FilterObstaclesByClusterSize failed: %s", e.what());
+      obstacles_filtered = Eigen::MatrixX3f(0, 3);  // Return empty on error
+    } catch (...) {
+      RCLCPP_ERROR(this->get_logger(), "FilterObstaclesByClusterSize failed with unknown exception");
+      obstacles_filtered = Eigen::MatrixX3f(0, 3);  // Return empty on error
     }
-  } catch (const std::exception& e) {
-    RCLCPP_ERROR(this->get_logger(), "FilterObstaclesByClusterSize failed: %s", e.what());
-    obstacles_filtered = Eigen::MatrixX3f(0, 3);  // Return empty on error
-  } catch (...) {
-    RCLCPP_ERROR(this->get_logger(), "FilterObstaclesByClusterSize failed with unknown exception");
-    obstacles_filtered = Eigen::MatrixX3f(0, 3);  // Return empty on error
   }
 
-  PublishClouds(ground, nonground, obstacles_filtered, msg->header);
+  // Publishing phase with timing
+  {
+    ScopedTimer publishing_timer(profiling_data_.publishing_times, profiling_window_size_, enable_profiling_);
+    PublishClouds(ground, nonground, obstacles_filtered, msg->header);
+  }
+
+  // Output profiling statistics periodically
+  OutputProfilingStatistics();
 }
 
 Eigen::MatrixX3f GroundSegmentationServer::FilterPointCloudByFOV(const Eigen::MatrixX3f &cloud, const std_msgs::msg::Header &header) {
   Eigen::MatrixX3f working_cloud;
 
   // Apply TF2 transformation if target frame is specified
-  if (!target_frame_.empty() && target_frame_ != header.frame_id) {
+  {
+    ScopedTimer transform_timer(profiling_data_.transform_times, profiling_window_size_, enable_profiling_);
+
+    if (!target_frame_.empty() && target_frame_ != header.frame_id) {
     try {
       // Use cached transform for static transforms
       std::string transform_key = header.frame_id + "->" + target_frame_;
@@ -238,12 +272,15 @@ Eigen::MatrixX3f GroundSegmentationServer::FilterPointCloudByFOV(const Eigen::Ma
                            "Transform failed: %s, using original points", ex.what());
       working_cloud = cloud;
     }
-  } else {
-    // No transformation needed, use original cloud
-    working_cloud = cloud;
-  }
+    } else {
+      // No transformation needed, use original cloud
+      working_cloud = cloud;
+    }
+  }  // End transform timing
 
   // Apply FOV filtering on (possibly transformed) points
+  {
+    ScopedTimer fov_timer(profiling_data_.fov_filter_times, profiling_window_size_, enable_profiling_);
   if (fov_angle_deg_ >= 360.0) {
     // No filtering needed if FOV is 360 degrees or more
     return working_cloud;
@@ -281,7 +318,8 @@ Eigen::MatrixX3f GroundSegmentationServer::FilterPointCloudByFOV(const Eigen::Ma
     filtered_cloud.row(i) = working_cloud.row(valid_indices[i]);
   }
 
-  return filtered_cloud;
+    return filtered_cloud;
+  }  // End FOV timing
 }
 
 std::string GroundSegmentationServer::GetOutputFrameId() const {
@@ -326,6 +364,8 @@ Eigen::MatrixX3f GroundSegmentationServer::FilterObstaclesByClusterSize(const Ei
 
   if (enable_persistent_tracking_) {
     // Track persistent clusters across frames
+    ScopedTimer persistent_timer(profiling_data_.persistent_tracking_times, profiling_window_size_, enable_profiling_);
+
     try {
       if (debug_logging_) {
         RCLCPP_INFO(this->get_logger(), "Running persistent tracking on %zu clusters", cluster_indices.size());
@@ -989,13 +1029,17 @@ void GroundSegmentationServer::PublishClouds(const Eigen::MatrixX3f &est_ground,
     }
   }
 
-  // Filter out floating obstacles before publishing
+  // Filter out floating obstacles before publishing with timing
   std::vector<ClusterDetail> grounded_clusters;
-  for (const auto& cluster : current_cluster_details_) {
-    if (IsObstacleGrounded(cluster, ground_level)) {
-      grounded_clusters.push_back(cluster);
-    } else if (debug_logging_) {
-      RCLCPP_INFO(this->get_logger(), "Filtered out floating obstacle cluster %u", cluster.id);
+  {
+    ScopedTimer floating_timer(profiling_data_.floating_filter_times, profiling_window_size_, enable_profiling_);
+
+    for (const auto& cluster : current_cluster_details_) {
+      if (IsObstacleGrounded(cluster, ground_level)) {
+        grounded_clusters.push_back(cluster);
+      } else if (debug_logging_) {
+        RCLCPP_INFO(this->get_logger(), "Filtered out floating obstacle cluster %u", cluster.id);
+      }
     }
   }
 
@@ -1048,6 +1092,79 @@ void GroundSegmentationServer::PublishClouds(const Eigen::MatrixX3f &est_ground,
   // Publish bounding box markers for Foxglove visualization
   auto bounding_box_markers = CreateBoundingBoxMarkers(grounded_clusters, header);
   bounding_box_publisher_->publish(bounding_box_markers);
+}
+
+void GroundSegmentationServer::OutputProfilingStatistics() {
+  if (!enable_profiling_) return;
+
+  // Check if it's time for periodic output
+  auto now = std::chrono::high_resolution_clock::now();
+  double elapsed = std::chrono::duration<double>(now - profiling_data_.last_output_time).count();
+
+  if (profiling_output_interval_ > 0.0 && elapsed >= profiling_output_interval_) {
+    profiling_data_.last_output_time = now;
+
+    RCLCPP_INFO(this->get_logger(), "\n=== PERFORMANCE PROFILING STATISTICS ===");
+    RCLCPP_INFO(this->get_logger(), "Window size: %d frames, Time period: %.1f seconds",
+                profiling_window_size_, elapsed);
+    RCLCPP_INFO(this->get_logger(), "Processing mode: %s",
+                use_simple_obstacle_detection_ ? "Simple Obstacle Detection" : "Patchwork++");
+    RCLCPP_INFO(this->get_logger(), "Persistent tracking: %s",
+                enable_persistent_tracking_ ? "Enabled" : "Disabled");
+
+    // Print timing statistics (Average / Max in milliseconds)
+    RCLCPP_INFO(this->get_logger(), "Component Timings (Avg/Max ms):");
+    RCLCPP_INFO(this->get_logger(), "  Transform:          %6.2f / %6.2f",
+                profiling_data_.GetAverage(profiling_data_.transform_times),
+                profiling_data_.GetMax(profiling_data_.transform_times));
+    RCLCPP_INFO(this->get_logger(), "  FOV Filter:         %6.2f / %6.2f",
+                profiling_data_.GetAverage(profiling_data_.fov_filter_times),
+                profiling_data_.GetMax(profiling_data_.fov_filter_times));
+
+    if (use_simple_obstacle_detection_) {
+      RCLCPP_INFO(this->get_logger(), "  Simple Detection:   %6.2f / %6.2f",
+                  profiling_data_.GetAverage(profiling_data_.ground_segmentation_times),
+                  profiling_data_.GetMax(profiling_data_.ground_segmentation_times));
+    } else {
+      RCLCPP_INFO(this->get_logger(), "  Ground Segmentation:%6.2f / %6.2f",
+                  profiling_data_.GetAverage(profiling_data_.ground_segmentation_times),
+                  profiling_data_.GetMax(profiling_data_.ground_segmentation_times));
+    }
+
+    RCLCPP_INFO(this->get_logger(), "  Clustering:         %6.2f / %6.2f",
+                profiling_data_.GetAverage(profiling_data_.clustering_times),
+                profiling_data_.GetMax(profiling_data_.clustering_times));
+
+    if (enable_persistent_tracking_ && !profiling_data_.persistent_tracking_times.empty()) {
+      RCLCPP_INFO(this->get_logger(), "  Persistent Tracking:%6.2f / %6.2f",
+                  profiling_data_.GetAverage(profiling_data_.persistent_tracking_times),
+                  profiling_data_.GetMax(profiling_data_.persistent_tracking_times));
+    }
+
+    RCLCPP_INFO(this->get_logger(), "  Floating Filter:    %6.2f / %6.2f",
+                profiling_data_.GetAverage(profiling_data_.floating_filter_times),
+                profiling_data_.GetMax(profiling_data_.floating_filter_times));
+
+    RCLCPP_INFO(this->get_logger(), "  Publishing:         %6.2f / %6.2f",
+                profiling_data_.GetAverage(profiling_data_.publishing_times),
+                profiling_data_.GetMax(profiling_data_.publishing_times));
+
+    RCLCPP_INFO(this->get_logger(), "  TOTAL FRAME:        %6.2f / %6.2f",
+                profiling_data_.GetAverage(profiling_data_.total_frame_times),
+                profiling_data_.GetMax(profiling_data_.total_frame_times));
+
+    // Calculate frame rate
+    double avg_frame_time_seconds = profiling_data_.GetAverage(profiling_data_.total_frame_times) / 1000.0;
+    double fps = (avg_frame_time_seconds > 0.0) ? (1.0 / avg_frame_time_seconds) : 0.0;
+
+    RCLCPP_INFO(this->get_logger(), "Average FPS: %.1f Hz (target: 10 Hz)", fps);
+
+    if (fps < 9.0) {
+      RCLCPP_WARN(this->get_logger(), "Processing speed below target! Consider optimization or parameter tuning.");
+    }
+
+    RCLCPP_INFO(this->get_logger(), "=======================================\n");
+  }
 }
 }  // namespace patchworkpp_ros
 
