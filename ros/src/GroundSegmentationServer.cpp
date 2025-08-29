@@ -1,6 +1,7 @@
 #include <memory>
 #include <utility>
 #include <vector>
+#include <limits>
 
 #include <Eigen/Core>
 
@@ -342,14 +343,30 @@ Eigen::MatrixX3f GroundSegmentationServer::FilterObstaclesByClusterSize(const Ei
   // Build filtered obstacle cloud from valid clusters (fast path) and extract cluster details
   std::vector<int> valid_indices;
 
-  uint32_t cluster_id = 0;
   for (const auto& cluster : cluster_indices) {
     if (cluster.indices.size() < static_cast<size_t>(min_cluster_size_)) {
       continue;
     }
 
-    // Extract cluster details using helper method
-    ClusterDetail detail = ExtractClusterDetail(cluster.indices, cloud, cluster_id++, 100); // 100% confidence for non-persistent mode
+    // Calculate cluster centroid for stable ID generation
+    Eigen::Vector3f centroid(0.0f, 0.0f, 0.0f);
+    for (int idx : cluster.indices) {
+      if (idx >= 0 && static_cast<size_t>(idx) < cloud->points.size()) {
+        const auto& point = cloud->points[idx];
+        centroid.x() += point.x;
+        centroid.y() += point.y;
+        centroid.z() += point.z;
+      }
+    }
+    centroid /= static_cast<float>(cluster.indices.size());
+
+    // Generate stable ID based on spatial position (more consistent than sequential)
+    // Use a spatial hash of the centroid position for semi-persistent IDs
+    uint32_t stable_id = static_cast<uint32_t>(
+        std::abs(static_cast<int>(centroid.x() * 100) + static_cast<int>(centroid.y() * 100) * 1000) % 10000);
+
+    // Extract cluster details using helper method with stable ID
+    ClusterDetail detail = ExtractClusterDetail(cluster.indices, cloud, stable_id, 100); // 100% confidence for non-persistent mode
     current_cluster_details_.push_back(detail);
 
     // Add cluster points to valid indices
@@ -544,7 +561,8 @@ Eigen::MatrixX3f GroundSegmentationServer::TrackPersistentClusters(
 
       // Add new cluster
       try {
-        persistent_clusters_.emplace_back(current.first, current.second.size(), current_frame_id_);
+        uint32_t new_id = GetNextClusterID();
+        persistent_clusters_.emplace_back(current.first, current.second.size(), current_frame_id_, new_id);
 
         if (debug_logging_) {
           RCLCPP_INFO(this->get_logger(), "Successfully added cluster, persistent_clusters size: %zu", persistent_clusters_.size());
@@ -579,7 +597,6 @@ Eigen::MatrixX3f GroundSegmentationServer::TrackPersistentClusters(
 
   // Build result from valid persistent clusters and extract cluster details
   std::vector<int> valid_cluster_indices;
-  uint32_t cluster_id = 0;
 
   for (const auto& current : current_clusters) {
     // Check if this cluster matches a valid persistent cluster
@@ -587,11 +604,11 @@ Eigen::MatrixX3f GroundSegmentationServer::TrackPersistentClusters(
       if (persistent.frame_count >= min_frames_for_obstacle_) {
         const float distance_sq = (current.first - persistent.center).squaredNorm();
         if (distance_sq < max_distance_sq) {
-          // Extract cluster details using helper method
+          // Extract cluster details using helper method with persistent ID
           // Normalize confidence as percentage: min_frames_for_obstacle_ = 100%, higher frame counts can exceed 100%
           float confidence_ratio = static_cast<float>(persistent.frame_count) / static_cast<float>(min_frames_for_obstacle_);
           uint8_t confidence_level = std::min(255, static_cast<int>(confidence_ratio * 100.0f)); // Cap at uint8 max, not 100%
-          ClusterDetail detail = ExtractClusterDetail(current.second, cloud, cluster_id++, confidence_level);
+          ClusterDetail detail = ExtractClusterDetail(current.second, cloud, persistent.persistent_id, confidence_level);
           current_cluster_details_.push_back(detail);
 
           valid_cluster_indices.insert(valid_cluster_indices.end(),
@@ -789,6 +806,62 @@ bool GroundSegmentationServer::IsObstacleGrounded(const ClusterDetail& cluster_d
   }
 
   return is_grounded;
+}
+
+uint32_t GroundSegmentationServer::GetNextClusterID() {
+  uint32_t candidate_id = next_cluster_id_;
+
+  // Handle overflow
+  if (next_cluster_id_ == std::numeric_limits<uint32_t>::max()) {
+    next_cluster_id_ = 1; // Reset to 1, avoiding 0
+  } else {
+    next_cluster_id_++;
+  }
+
+  // Check for ID collision with existing persistent clusters (extremely rare after overflow)
+  // This is a safety check for the very unlikely case where IDs wrap around and collide
+  bool collision_found = false;
+  for (const auto& persistent : persistent_clusters_) {
+    if (persistent.persistent_id == candidate_id) {
+      collision_found = true;
+      break;
+    }
+  }
+
+  // If collision found (very rare), try a few more IDs
+  if (collision_found) {
+    for (uint32_t attempt = 0; attempt < 1000; ++attempt) {
+      candidate_id = next_cluster_id_;
+
+      // Advance next_cluster_id_ for next attempt
+      if (next_cluster_id_ == std::numeric_limits<uint32_t>::max()) {
+        next_cluster_id_ = 1;
+      } else {
+        next_cluster_id_++;
+      }
+
+      // Check if this ID is available
+      bool collision = false;
+      for (const auto& persistent : persistent_clusters_) {
+        if (persistent.persistent_id == candidate_id) {
+          collision = true;
+          break;
+        }
+      }
+
+      if (!collision) {
+        break; // Found available ID
+      }
+    }
+
+    // If we still have collision after 1000 attempts, just use the candidate anyway
+    // This is extremely unlikely (would require 4 billion+ active clusters)
+    if (collision_found) {
+      RCLCPP_WARN(this->get_logger(), "Cluster ID collision detected but using ID %u anyway", candidate_id);
+    }
+  }
+
+  return candidate_id;
 }
 
 visualization_msgs::msg::MarkerArray GroundSegmentationServer::CreateBoundingBoxMarkers(

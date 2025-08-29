@@ -75,6 +75,9 @@ class GroundSegmentationServer : public rclcpp::Node {
   /// Check if an obstacle is grounded (not floating)
   bool IsObstacleGrounded(const ClusterDetail& cluster_detail, double ground_level) const;
 
+  /// Generate next available cluster ID, handling overflow and collision avoidance
+  uint32_t GetNextClusterID();
+
   /// Create bounding box markers for Foxglove visualization
   visualization_msgs::msg::MarkerArray CreateBoundingBoxMarkers(
       const std::vector<ClusterDetail>& clusters,
@@ -136,12 +139,14 @@ class GroundSegmentationServer : public rclcpp::Node {
     int frame_count;
     size_t point_count;
     int last_seen_frame;
+    uint32_t persistent_id;  // Unique ID that persists across frames
 
-    ClusterInfo(const Eigen::Vector3f& c, size_t count, int frame)
-      : center(c), frame_count(1), point_count(count), last_seen_frame(frame) {}
+    ClusterInfo(const Eigen::Vector3f& c, size_t count, int frame, uint32_t id)
+      : center(c), frame_count(1), point_count(count), last_seen_frame(frame), persistent_id(id) {}
   };
-  
+
   int current_frame_id_;
+  uint32_t next_cluster_id_{1};  // Global ID counter for new clusters
 
   std::vector<ClusterInfo> persistent_clusters_;
 };
