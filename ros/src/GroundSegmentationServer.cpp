@@ -85,6 +85,9 @@ GroundSegmentationServer::GroundSegmentationServer(const rclcpp::NodeOptions &op
   profiling_window_size_ = declare_parameter<int>("profiling_window_size", 50);
   profiling_output_interval_ = declare_parameter<double>("profiling_output_interval", 10.0);
 
+  // Frame rate decimation parameters
+  frame_decimation_ratio_ = declare_parameter<int>("frame_decimation_ratio", 1);
+
   // Initialize profiling
   if (enable_profiling_ || enable_memory_profiling_) {
     profiling_data_.last_output_time = std::chrono::high_resolution_clock::now();
@@ -141,11 +144,34 @@ GroundSegmentationServer::GroundSegmentationServer(const rclcpp::NodeOptions &op
   bounding_box_publisher_ =
       create_publisher<visualization_msgs::msg::MarkerArray>("/civ/obstacle/bounding_boxes", qos);
 
+  // Log decimation configuration
+  if (frame_decimation_ratio_ > 1) {
+    RCLCPP_INFO(this->get_logger(), "Frame decimation enabled: processing every %dth frame (%.1fx slower)",
+                frame_decimation_ratio_, static_cast<double>(frame_decimation_ratio_));
+  } else {
+    RCLCPP_INFO(this->get_logger(), "Frame decimation disabled: processing all frames");
+  }
+
   RCLCPP_INFO(this->get_logger(), "Patchwork++ ROS 2 node initialized");
 }
 
 void GroundSegmentationServer::EstimateGround(
     const sensor_msgs::msg::PointCloud2::ConstSharedPtr &msg) {
+  // Frame rate decimation - skip processing if not the target frame
+  frame_counter_++;
+  if (frame_counter_ % frame_decimation_ratio_ != 0) {
+    if (debug_logging_) {
+      RCLCPP_DEBUG(this->get_logger(), "Skipping frame %d (decimation ratio: %d)",
+                   frame_counter_, frame_decimation_ratio_);
+    }
+    return; // Skip processing this frame
+  }
+
+  if (debug_logging_ && frame_decimation_ratio_ > 1) {
+    RCLCPP_DEBUG(this->get_logger(), "Processing frame %d (decimation ratio: %d)",
+                 frame_counter_, frame_decimation_ratio_);
+  }
+
   // Total frame timing
   ScopedTimer total_timer(profiling_data_.total_frame_times, profiling_window_size_, enable_profiling_);
 

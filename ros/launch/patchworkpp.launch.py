@@ -104,6 +104,8 @@ def generate_launch_description():
         "enable_memory_profiling": True,  # enable memory usage tracking and analysis
         "profiling_window_size": 50,  # number of frames to average for profiling statistics
         "profiling_output_interval": 10.0,  # seconds between profiling output (0 = disable periodic output)
+        # Frame rate decimation parameters
+        "frame_decimation_ratio": 1,  # process every Nth frame (1=no decimation, 2=half rate, 5=20% rate)
         "fov_angle_deg": 120.0,  # Field of view angle in degrees (±60° from positive x-axis)
         "num_sectors_each_zone": [12, 24, 36, 24],  # Setting of Concentric Zone Model(CZM); Default: [16, 32, 54, 32]
                                                     # 32 beams is half of the 64-beam systems tuned in the original tests.

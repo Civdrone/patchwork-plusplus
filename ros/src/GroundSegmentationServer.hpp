@@ -132,6 +132,10 @@ class GroundSegmentationServer : public rclcpp::Node {
   int profiling_window_size_{50};          // Number of frames for statistics
   double profiling_output_interval_{10.0}; // Seconds between profiling output
 
+  /// Frame rate decimation parameters
+  int frame_decimation_ratio_{1};          // Process every Nth frame (1=no decimation)
+  int frame_counter_{0};                   // Frame counter for decimation
+
   /// TF2 for coordinate transformation
   std::shared_ptr<tf2_ros::Buffer> tf_buffer_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
