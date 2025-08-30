@@ -658,23 +658,33 @@ Eigen::MatrixX3f GroundSegmentationServer::TrackPersistentClusters(
   std::vector<int> valid_cluster_indices;
 
   for (const auto& current : current_clusters) {
-    // Check if this cluster matches a valid persistent cluster
+    // Check if this cluster matches a persistent cluster (both validated and unvalidated)
     for (const auto& persistent : persistent_clusters_) {
-      if (persistent.frame_count >= min_frames_for_obstacle_) {
-        const float distance_sq = (current.first - persistent.center).squaredNorm();
-        if (distance_sq < max_distance_sq) {
-          // Extract cluster details using helper method with persistent ID
-          // Normalize confidence as percentage: min_frames_for_obstacle_ = 100%, higher frame counts can exceed 100%
-          float confidence_ratio = static_cast<float>(persistent.frame_count) / static_cast<float>(min_frames_for_obstacle_);
-          uint8_t confidence_level = std::min(255, static_cast<int>(confidence_ratio * 100.0f)); // Cap at uint8 max, not 100%
-          ClusterDetail detail = ExtractClusterDetail(current.second, cloud, persistent.persistent_id, confidence_level);
-          current_cluster_details_.push_back(detail);
+      const float distance_sq = (current.first - persistent.center).squaredNorm();
+      if (distance_sq < max_distance_sq) {
+        // Calculate improved confidence level with better scaling
+        float confidence_ratio = static_cast<float>(persistent.frame_count) / static_cast<float>(min_frames_for_obstacle_);
+        uint8_t confidence_level;
 
+        if (persistent.frame_count < min_frames_for_obstacle_) {
+          // Being validated: 0-99% based on progress toward minimum frames
+          confidence_level = static_cast<uint8_t>((confidence_ratio * 99.0f));
+        } else {
+          // Validated: 100-255% using full uint8_t range for long-term obstacles
+          float excess_ratio = confidence_ratio - 1.0f; // How much beyond minimum
+          confidence_level = static_cast<uint8_t>(100 + std::min(155.0f, excess_ratio * 10.0f)); // Use full range to 255
+        }
+
+        ClusterDetail detail = ExtractClusterDetail(current.second, cloud, persistent.persistent_id, confidence_level);
+        current_cluster_details_.push_back(detail);
+
+        // Only add to published obstacles if validated (meets minimum frames threshold)
+        if (persistent.frame_count >= min_frames_for_obstacle_) {
           valid_cluster_indices.insert(valid_cluster_indices.end(),
                                      current.second.begin(),
                                      current.second.end());
-          break;
         }
+        break;
       }
     }
   }
