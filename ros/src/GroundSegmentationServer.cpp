@@ -65,6 +65,10 @@ GroundSegmentationServer::GroundSegmentationServer(const rclcpp::NodeOptions &op
   enable_persistent_tracking_ = declare_parameter<bool>("enable_persistent_tracking", false);
   min_frames_for_obstacle_ = declare_parameter<int>("min_frames_for_obstacle", 3);
   max_cluster_distance_ = declare_parameter<double>("max_cluster_distance", 1.0);
+
+  // Clustering optimization parameters
+  enable_voxel_downsampling_ = declare_parameter<bool>("enable_voxel_downsampling", false);
+  voxel_leaf_size_ = declare_parameter<double>("voxel_leaf_size", 0.1);
   current_frame_id_ = 0;
   transform_cached_ = false;
 
@@ -150,6 +154,14 @@ GroundSegmentationServer::GroundSegmentationServer(const rclcpp::NodeOptions &op
                 frame_decimation_ratio_, static_cast<double>(frame_decimation_ratio_));
   } else {
     RCLCPP_INFO(this->get_logger(), "Frame decimation disabled: processing all frames");
+  }
+
+  // Log voxel downsampling configuration
+  if (enable_voxel_downsampling_) {
+    RCLCPP_INFO(this->get_logger(), "Voxel downsampling enabled: leaf size %.2fm (clustering optimization)",
+                voxel_leaf_size_);
+  } else {
+    RCLCPP_INFO(this->get_logger(), "Voxel downsampling disabled: using full point density for clustering");
   }
 
   RCLCPP_INFO(this->get_logger(), "Patchwork++ ROS 2 node initialized");
@@ -393,18 +405,37 @@ Eigen::MatrixX3f GroundSegmentationServer::FilterObstaclesByClusterSize(const Ei
   cloud->height = 1;
   cloud->is_dense = true;
 
+  // Apply voxel grid downsampling for clustering optimization if enabled
+  pcl::PointCloud<pcl::PointXYZ>::Ptr downsampled_cloud = cloud;
+  if (enable_voxel_downsampling_) {
+    ScopedTimer downsample_timer(profiling_data_.clustering_times, profiling_window_size_, enable_profiling_);
+
+    pcl::VoxelGrid<pcl::PointXYZ> voxel_filter;
+    voxel_filter.setInputCloud(cloud);
+    voxel_filter.setLeafSize(voxel_leaf_size_, voxel_leaf_size_, voxel_leaf_size_);
+
+    downsampled_cloud = pcl::PointCloud<pcl::PointXYZ>::Ptr(new pcl::PointCloud<pcl::PointXYZ>);
+    voxel_filter.filter(*downsampled_cloud);
+
+    if (debug_logging_) {
+      RCLCPP_DEBUG(this->get_logger(), "Voxel downsampling: %zu → %zu points (%.1f%% reduction)",
+                   cloud->points.size(), downsampled_cloud->points.size(),
+                   100.0 * (1.0 - static_cast<double>(downsampled_cloud->points.size()) / cloud->points.size()));
+    }
+  }
+
   // Create KD-Tree for efficient nearest neighbor search
   pcl::search::KdTree<pcl::PointXYZ>::Ptr tree(new pcl::search::KdTree<pcl::PointXYZ>);
-  tree->setInputCloud(cloud);
+  tree->setInputCloud(downsampled_cloud);
 
   // Perform Euclidean clustering
   std::vector<pcl::PointIndices> cluster_indices;
   pcl::EuclideanClusterExtraction<pcl::PointXYZ> ec;
   ec.setClusterTolerance(cluster_tolerance_);
   ec.setMinClusterSize(min_cluster_size_);
-  ec.setMaxClusterSize(obstacles.rows()); // No upper limit
+  ec.setMaxClusterSize(downsampled_cloud->points.size()); // No upper limit
   ec.setSearchMethod(tree);
-  ec.setInputCloud(cloud);
+  ec.setInputCloud(downsampled_cloud);
   ec.extract(cluster_indices);
 
   if (enable_persistent_tracking_) {
@@ -415,7 +446,7 @@ Eigen::MatrixX3f GroundSegmentationServer::FilterObstaclesByClusterSize(const Ei
       if (debug_logging_) {
         RCLCPP_INFO(this->get_logger(), "Running persistent tracking on %zu clusters", cluster_indices.size());
       }
-      return TrackPersistentClusters(cluster_indices, cloud);
+      return TrackPersistentClusters(cluster_indices, downsampled_cloud);
     } catch (const std::exception& e) {
       RCLCPP_ERROR(this->get_logger(), "Persistent tracking failed: %s, falling back to simple clustering", e.what());
       // Fall back to simple clustering on error
@@ -436,8 +467,8 @@ Eigen::MatrixX3f GroundSegmentationServer::FilterObstaclesByClusterSize(const Ei
     // Calculate cluster centroid for stable ID generation
     Eigen::Vector3f centroid(0.0f, 0.0f, 0.0f);
     for (int idx : cluster.indices) {
-      if (idx >= 0 && static_cast<size_t>(idx) < cloud->points.size()) {
-        const auto& point = cloud->points[idx];
+      if (idx >= 0 && static_cast<size_t>(idx) < downsampled_cloud->points.size()) {
+        const auto& point = downsampled_cloud->points[idx];
         centroid.x() += point.x;
         centroid.y() += point.y;
         centroid.z() += point.z;
@@ -451,7 +482,7 @@ Eigen::MatrixX3f GroundSegmentationServer::FilterObstaclesByClusterSize(const Ei
         std::abs(static_cast<int>(centroid.x() * 100) + static_cast<int>(centroid.y() * 100) * 1000) % 10000);
 
     // Extract cluster details using helper method with stable ID
-    ClusterDetail detail = ExtractClusterDetail(cluster.indices, cloud, stable_id, 100); // 100% confidence for non-persistent mode
+    ClusterDetail detail = ExtractClusterDetail(cluster.indices, downsampled_cloud, stable_id, 100); // 100% confidence for non-persistent mode
     current_cluster_details_.push_back(detail);
 
     // Add cluster points to valid indices
@@ -465,9 +496,9 @@ Eigen::MatrixX3f GroundSegmentationServer::FilterObstaclesByClusterSize(const Ei
   // Convert back to Eigen matrix
   Eigen::MatrixX3f filtered_obstacles(valid_indices.size(), 3);
   for (size_t i = 0; i < valid_indices.size(); ++i) {
-    filtered_obstacles(i, 0) = cloud->points[valid_indices[i]].x;
-    filtered_obstacles(i, 1) = cloud->points[valid_indices[i]].y;
-    filtered_obstacles(i, 2) = cloud->points[valid_indices[i]].z;
+    filtered_obstacles(i, 0) = downsampled_cloud->points[valid_indices[i]].x;
+    filtered_obstacles(i, 1) = downsampled_cloud->points[valid_indices[i]].y;
+    filtered_obstacles(i, 2) = downsampled_cloud->points[valid_indices[i]].z;
   }
 
   return filtered_obstacles;

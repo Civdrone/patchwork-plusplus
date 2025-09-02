@@ -33,10 +33,10 @@ find_package(tf2_sensor_msgs REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(civ_interfaces REQUIRED)
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(PCL_PKGCONF REQUIRED pcl_common pcl_search pcl_segmentation pcl_kdtree)
+pkg_check_modules(PCL_PKGCONF REQUIRED pcl_common pcl_search pcl_segmentation pcl_kdtree pcl_filters)
 # Use only the include directories and manually specify libraries
 set(PCL_INCLUDE_DIRS ${PCL_PKGCONF_INCLUDE_DIRS})
-set(PCL_LIBRARIES "-lpcl_common -lpcl_search -lpcl_segmentation -lpcl_kdtree")
+set(PCL_LIBRARIES "-lpcl_common -lpcl_search -lpcl_segmentation -lpcl_kdtree -lpcl_filters")
 
 # ROS 2 node. gseg: Abbrev. of `g`round `seg`mentation
 add_library(gseg_component SHARED src/GroundSegmentationServer.cpp)

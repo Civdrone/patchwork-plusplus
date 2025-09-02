@@ -88,6 +88,9 @@ def generate_launch_description():
         "obstacle_max_radius": 5.0,  # maximum distance from sensor to consider as obstacle
         "cluster_tolerance": 0.5,  # maximum distance between points in same cluster (meters)
         "min_cluster_size": 5,  # minimum number of points required to keep an obstacle cluster
+        # Clustering optimization parameters
+        "enable_voxel_downsampling": True,  # enable spatial downsampling before clustering for performance
+        "voxel_leaf_size": 0.1,  # voxel grid leaf size for downsampling (meters) - smaller=more detail, larger=faster
         "enable_persistent_tracking": True,  # enable/disable persistent cluster tracking across frames
         "min_frames_for_obstacle": 3,  # minimum number of consecutive frames to confirm obstacle persistence
         "max_cluster_distance": 1.0,  # maximum distance to match clusters between frames (meters)

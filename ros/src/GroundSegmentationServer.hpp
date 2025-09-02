@@ -13,6 +13,7 @@
 #include <pcl/point_types.h>
 #include <pcl/segmentation/extract_clusters.h>
 #include <pcl/kdtree/kdtree.h>
+#include <pcl/filters/voxel_grid.h>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <std_msgs/msg/header.hpp>
 #include <civ_interfaces/msg/obstacle_state.hpp>
@@ -113,6 +114,10 @@ class GroundSegmentationServer : public rclcpp::Node {
   bool enable_persistent_tracking_;
   int min_frames_for_obstacle_;
   double max_cluster_distance_;
+
+  /// Clustering optimization parameters
+  bool enable_voxel_downsampling_{false};  // Enable spatial downsampling before clustering
+  double voxel_leaf_size_{0.1};            // Voxel grid leaf size (meters)
 
   /// Simple obstacle detection parameters
   bool use_simple_obstacle_detection_;
