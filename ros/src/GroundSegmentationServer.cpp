@@ -342,6 +342,10 @@ Eigen::MatrixX3f GroundSegmentationServer::FilterPointCloudByFOV(const Eigen::Ma
     // No filtering needed if FOV is 360 degrees or more
     return working_cloud;
   }
+  else
+  {
+    RCLCPP_INFO(this->get_logger(), "FOV is set to %f degrees.", fov_angle_deg_);
+  }
 
   // Pre-compute trigonometric values for FOV
   const float half_fov = static_cast<float>(fov_angle_rad_ / 2.0);
