@@ -344,7 +344,9 @@ Eigen::MatrixX3f GroundSegmentationServer::FilterPointCloudByFOV(const Eigen::Ma
   }
   else
   {
-    RCLCPP_INFO(this->get_logger(), "FOV is set to %f degrees.", fov_angle_deg_);
+    if (debug_logging_) {
+      RCLCPP_INFO(this->get_logger(), "FOV is set to %f degrees.", fov_angle_deg_);
+    }
   }
 
   // Pre-compute trigonometric values for FOV
