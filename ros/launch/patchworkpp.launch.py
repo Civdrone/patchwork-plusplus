@@ -53,6 +53,15 @@ def generate_launch_description():
     # Target frame for FOV filtering (can be different from lidar_target_frame)
     target_frame = LaunchConfiguration("target_frame", default="ouster_transformed")
 
+    # FOV angle parameter
+    fov_angle_deg = LaunchConfiguration("fov_angle_deg", default="120.0")
+
+    # Processing mode parameters
+    use_simple_obstacle_detection = LaunchConfiguration("use_simple_obstacle_detection", default="false")
+    enable_persistent_tracking = LaunchConfiguration("enable_persistent_tracking", default="false")
+    enable_voxel_downsampling = LaunchConfiguration("enable_voxel_downsampling", default="false")
+    voxel_leaf_size = LaunchConfiguration("voxel_leaf_size", default="0.1")
+
     # Optional ros bag play
     bagfile = LaunchConfiguration("bagfile", default="")
 
@@ -89,12 +98,12 @@ def generate_launch_description():
         "cluster_tolerance": 0.5,  # maximum distance between points in same cluster (meters)
         "min_cluster_size": 5,  # minimum number of points required to keep an obstacle cluster
         # Clustering optimization parameters
-        "enable_voxel_downsampling": True,  # enable spatial downsampling before clustering for performance
-        "voxel_leaf_size": 0.1,  # voxel grid leaf size for downsampling (meters) - smaller=more detail, larger=faster
-        "enable_persistent_tracking": True,  # enable/disable persistent cluster tracking across frames
+        "enable_voxel_downsampling": enable_voxel_downsampling,  # enable spatial downsampling before clustering for performance
+        "voxel_leaf_size": voxel_leaf_size,  # voxel grid leaf size for downsampling (meters) - smaller=more detail, larger=faster
+        "enable_persistent_tracking": enable_persistent_tracking,  # enable/disable persistent cluster tracking across frames
         "min_frames_for_obstacle": 3,  # minimum number of consecutive frames to confirm obstacle persistence
         "max_cluster_distance": 1.0,  # maximum distance to match clusters between frames (meters)
-        "use_simple_obstacle_detection": False,  # use simple height/distance thresholding instead of Patchwork++
+        "use_simple_obstacle_detection": use_simple_obstacle_detection,  # use simple height/distance thresholding instead of Patchwork++
         "simple_obstacle_min_height": 0.2,  # minimum height above ground for simple obstacle detection (meters)
         "simple_obstacle_max_height": 3.0,  # maximum height above ground for simple obstacle detection (meters)
         "simple_obstacle_max_distance": 5.0,  # maximum distance for simple obstacle detection (meters)
@@ -109,7 +118,7 @@ def generate_launch_description():
         "profiling_output_interval": 10.0,  # seconds between profiling output (0 = disable periodic output)
         # Frame rate decimation parameters
         "frame_decimation_ratio": 1,  # process every Nth frame (1=no decimation, 2=half rate, 5=20% rate)
-        "fov_angle_deg": 120.0,  # Field of view angle in degrees (±60° from positive x-axis)
+        "fov_angle_deg": fov_angle_deg,  # Field of view angle in degrees (±60° from positive x-axis)
         "num_sectors_each_zone": [12, 24, 36, 24],  # Setting of Concentric Zone Model(CZM); Default: [16, 32, 54, 32]
                                                     # 32 beams is half of the 64-beam systems tuned in the original tests.
                                                     # Fewer sectors will ensure adequate bin occupancy per sector even in irregular terrain.
