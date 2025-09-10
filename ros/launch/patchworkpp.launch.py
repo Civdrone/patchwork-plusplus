@@ -58,8 +58,8 @@ def generate_launch_description():
 
     # Processing mode parameters
     use_simple_obstacle_detection = LaunchConfiguration("use_simple_obstacle_detection", default="false")
-    enable_persistent_tracking = LaunchConfiguration("enable_persistent_tracking", default="false")
-    enable_voxel_downsampling = LaunchConfiguration("enable_voxel_downsampling", default="false")
+    enable_persistent_tracking = LaunchConfiguration("enable_persistent_tracking", default="true")
+    enable_voxel_downsampling = LaunchConfiguration("enable_voxel_downsampling", default="true")
     voxel_leaf_size = LaunchConfiguration("voxel_leaf_size", default="0.1")
 
     # Optional ros bag play
